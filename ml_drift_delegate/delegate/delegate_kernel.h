@@ -66,10 +66,10 @@ class DelegateKernel {
                                       TfLiteIntArray** temporaries_array_ptr);
 
   // Dequantizes the input tensors using `quant_conversion_map_`.
-  absl::Status DequantizeInputs(TfLiteContext* context);
+  virtual absl::Status DequantizeInputs(TfLiteContext* context);
 
   // Quantizes the output tensors using `quant_conversion_map_`.
-  absl::Status QuantizeOutputs(TfLiteContext* context);
+  virtual absl::Status QuantizeOutputs(TfLiteContext* context);
 
   // Initializes the delegate kernel. This method is called by the Create()
   // method of the derived classes.
@@ -250,6 +250,10 @@ class DelegateKernel {
   // Set of external tensor ids. It's updated by
   // InitializeExternalSharedConstantTensors().
   absl::flat_hash_set<::ml_drift::ValueId> external_tensor_ids_;
+
+  const absl::flat_hash_map<int, int>& quant_conversion_map() const {
+    return quant_conversion_map_;
+  }
 
  private:
   // Ordered set of external shared constant tensor ids.

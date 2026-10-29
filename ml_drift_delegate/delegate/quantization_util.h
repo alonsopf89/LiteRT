@@ -31,18 +31,24 @@ namespace delegate {
 // inputs to GPU delegate.
 // quant_conversion_map contains bidirectional mapping between dequantized
 // tensor and its original quantized one.
+// If float_buffer_overrides is provided and contains a dequantized tensor
+// index, writes the dequantized floats to that buffer instead of tensor.data.f.
 absl::Status DequantizeInputs(
     TfLiteContext* context, const std::vector<int64_t>& input_indices,
-    const absl::flat_hash_map<int, int>& quant_conversion_map);
+    const absl::flat_hash_map<int, int>& quant_conversion_map,
+    const absl::flat_hash_map<int, float*>* float_buffer_overrides = nullptr);
 
 // Quantizes output tensors post-inference, leaving float tensors intact.
 // output_indices contains (fp32) inputs to be quantized, which are outputs of
 // GPU delegate.
 // quant_conversion_map contains bidirectional mapping between dequantized
 // tensor and its original quantized one.
+// If float_buffer_overrides is provided and contains a dequantized tensor
+// index, reads the float values from that buffer instead of tensor.data.f.
 absl::Status QuantizeOutputs(
     TfLiteContext* context, const std::vector<int64_t>& output_indices,
-    const absl::flat_hash_map<int, int>& quant_conversion_map);
+    const absl::flat_hash_map<int, int>& quant_conversion_map,
+    const absl::flat_hash_map<int, float*>* float_buffer_overrides = nullptr);
 
 }  // namespace delegate
 }  // namespace ml_drift

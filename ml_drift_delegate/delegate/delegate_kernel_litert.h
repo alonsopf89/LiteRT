@@ -15,8 +15,10 @@
 #ifndef THIRD_PARTY_ODML_LITERT_ML_DRIFT_DELEGATE_DELEGATE_KERNEL_LITERT_H_
 #define THIRD_PARTY_ODML_LITERT_ML_DRIFT_DELEGATE_DELEGATE_KERNEL_LITERT_H_
 
+#include <cstddef>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -48,6 +50,9 @@ class DelegateKernelLiteRt : public DelegateKernel {
   ~DelegateKernelLiteRt() override = default;
 
   absl::Status Dispatch(TfLiteContext* context) override;
+
+  absl::Status DequantizeInputs(TfLiteContext* context) override;
+  absl::Status QuantizeOutputs(TfLiteContext* context) override;
 
   // Creates a new DelegateKernel which will be stored in TfLiteNode::user_data.
   static absl::StatusOr<DelegateKernelLiteRt*> Create(
@@ -131,6 +136,14 @@ class DelegateKernelLiteRt : public DelegateKernel {
     return runtime_context_;
   }
 
+  bool has_host_memory_buffers() const { return has_host_memory_buffers_; }
+
+  // Returns true if the tensor buffer is an AHardwareBuffer.
+  bool IsAhwbTensorBuffer(const GpuTensorBufferPtr& tensor_buffer) const;
+
+  // Returns true if the tensor buffer is a HostMemory buffer.
+  bool IsHostMemoryTensorBuffer(const GpuTensorBufferPtr& tensor_buffer) const;
+
  protected:
   // A virtual function to update the create info with external tensors.
   // In addition to this, it conducts the following tasks:
@@ -170,6 +183,9 @@ class DelegateKernelLiteRt : public DelegateKernel {
     }
     return DelegateKernel::GetStorageType();
   }
+
+  void set_has_ahwb_tensor_buffers(bool has) { has_ahwb_tensor_buffers_ = has; }
+  void set_has_host_memory_buffers(bool has) { has_host_memory_buffers_ = has; }
 
  private:
   const LiteRtRuntimeContext* runtime_context_;
@@ -237,8 +253,17 @@ class DelegateKernelLiteRt : public DelegateKernel {
                                      GpuTensorBufferPtr& tensor_buffer,
                                      ::ml_drift::ValueId tensor_id);
 
-  // Returns true if the tensor buffer is an AHardwareBuffer.
-  bool IsAhwbTensorBuffer(const GpuTensorBufferPtr& tensor_buffer) const;
+  // Creates/resizes page-aligned HostMemory TensorBuffers for non-external
+  // synthetic quantized->float32 conversion tensors when the backend supports
+  // zero-copy HostMemory, avoiding internal OpenClBufferPacked readbacks and
+  // intermediate CPU memcpys.
+  absl::Status EnsureQuantizedHostBuffers(TfLiteContext* context);
+
+  struct QuantizedHostBuffer {
+    void* host_ptr = nullptr;
+    size_t tensor_bytes = 0;
+    std::vector<int> dims;
+  };
 
   // Tensor descriptors for I/O tensors.
   // The size and order of these vectors should be the same as input_indices_
@@ -263,6 +288,20 @@ class DelegateKernelLiteRt : public DelegateKernel {
   // AHardwareBuffer. Updated by BindExternalTensorBuffers() and used by
   // HandleOutputEvents().
   bool has_ahwb_tensor_buffers_ = false;
+
+  // Whether any input or output tensor of the current Invoke() is bound to a
+  // HostMemory buffer. Updated by BindExternalTensorBuffers() and used by
+  // HandleOutputEvents().
+  bool has_host_memory_buffers_ = false;
+
+  // Cached required alignment (in bytes) when backend supports zero-copy
+  // HostMemory for non-external buffers, or 0 if unsupported.
+  std::optional<size_t> quantized_host_alignment_;
+
+  // Internal 4096-aligned HostMemory buffers registered in buffer_context_ for
+  // synthetic quantized->float32 conversion tensors, keyed by fp_tensor index.
+  absl::flat_hash_map<int, QuantizedHostBuffer> quantized_host_buffers_;
+  absl::flat_hash_map<int, float*> quantized_host_ptrs_;
 };
 
 }  // namespace litert::ml_drift
