@@ -48,14 +48,30 @@ class, with the following exceptions:
 *   `algorithm_params` is an optional dictionary of algorithm-specific options
     on `weight_tensor_config` (or `activation_tensor_config`), such as:
 
+    *   `"centered"` (`bool`, default `false`): Supported when `algorithm_key`
+        is `"min_max_uniform_quantize"` or `"OCTAV"` (or an algorithm that
+        delegates weight quantization to OCTAV when `scale_refinement` is
+        `"none"`), `num_bits` is `2`, `symmetric` is `true`, and `dtype` is
+        `"INT"` on weight tensors. Quantizes weights onto the centered 4-level
+        mid-riser grid `{-1.5, -0.5, 0.5, 1.5} * scale` (`q` in
+        `{-2, -1, 0, 1}`, `zero_point = -0.5`), packing 4 weights per byte into
+        `INT2` with `BlockwiseQuantization`. Runs on TFLite 2.23+ built-in CPU
+        kernels (not `XNNPACK`, which rejects blockwise `INT2`, and not GPU
+        delegates, which require integer `zero_point`). With
+        `"centered": false`, standard `AffineQuantization` (`zero_point = 0`)
+        delegates to `XNNPACK` only for `"CHANNELWISE"` `FULLY_CONNECTED` with
+        `compute_precision: "INTEGER"`, `explicit_dequantize: false` (DRQ), and
+        `input_channels % 4 == 0` (not `"TENSORWISE"`, `"BLOCKWISE_*"`,
+        weight-only `explicit_dequantize: true`, or `EMBEDDING_LOOKUP`).
+
     *   `"int2_in_int4"` (`bool`, default `false`): Supported when
         `algorithm_key` is `"OCTAV"` (or an algorithm that delegates weight
         quantization to OCTAV, such as `"HADAMARD_ROTATION"` or
         `"DECOMPOSED_HADAMARD_ROTATION"`), `num_bits` is `4`, and `symmetric` is
-        `true`. Quantizes weights to the 4-level 2-bit mid-riser codebook `{-3,
-        -1, 1, 3} * scale` stored in a signed `INT4` container for evaluating or
-        executing 2-bit-quantized weights on `INT4` kernels (does not reduce
-        FlatBuffer storage size below `INT4`).
+        `true`. Quantizes weights to the 4-level 2-bit mid-riser codebook
+        `{-3, -1, 1, 3} * scale` stored in a signed `INT4` container for
+        evaluating or executing 2-bit-quantized weights on `INT4` kernels (does
+        not reduce FlatBuffer storage size below `INT4`).
 
 ## Customizing Input/Output Precision
 

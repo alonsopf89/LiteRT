@@ -72,28 +72,7 @@ class FullyConnectedTest(op_test_utils.BaseQuantizeTest):
     )
     self._op_test_info.op_tensor_names = op_tensor_names
 
-  # TODO(rewu): add int16 tests.
-  @parameterized.product(
-      num_bits_weight=(4, 8),
-      granularity=(
-          qtyping.QuantGranularity.CHANNELWISE,
-          qtyping.QuantGranularity.TENSORWISE,
-      ),
-      # get_tensor_quant_params_func, symmetric_weight
-      algos=(
-          (naive_min_max_quantize.get_tensor_quant_params, True),
-          (naive_min_max_quantize.get_tensor_quant_params, False),
-          (octav.get_tensor_quant_params, True),
-      ),
-      test_case=(
-          # Tuple holds compute precision and whether to use srq and explicit
-          # dequantize.
-          (_ComputePrecision.FLOAT, False, True),
-          (_ComputePrecision.INTEGER, False, False),
-          (_ComputePrecision.INTEGER, True, False),
-      ),
-  )
-  def test_materialize_fully_connected_succeeds(
+  def _assert_materialize_fully_connected_succeeds(
       self,
       num_bits_weight,
       granularity,
@@ -133,6 +112,65 @@ class FullyConnectedTest(op_test_utils.BaseQuantizeTest):
         self._op_test_info,
         common_quantize.materialize_fc_conv,
         get_tensor_quant_params_func,
+    )
+
+  # TODO(rewu): add int16 tests.
+  @parameterized.product(
+      num_bits_weight=(4, 8),
+      granularity=(
+          qtyping.QuantGranularity.CHANNELWISE,
+          qtyping.QuantGranularity.TENSORWISE,
+      ),
+      # get_tensor_quant_params_func, symmetric_weight
+      algos=(
+          (naive_min_max_quantize.get_tensor_quant_params, True),
+          (naive_min_max_quantize.get_tensor_quant_params, False),
+          (octav.get_tensor_quant_params, True),
+      ),
+      test_case=(
+          # Tuple holds compute precision and whether to use srq and explicit
+          # dequantize.
+          (_ComputePrecision.FLOAT, False, True),
+          (_ComputePrecision.INTEGER, False, False),
+          (_ComputePrecision.INTEGER, True, False),
+      ),
+  )
+  def test_materialize_fully_connected_succeeds(
+      self,
+      num_bits_weight,
+      granularity,
+      algos,
+      test_case,
+  ):
+    self._assert_materialize_fully_connected_succeeds(
+        num_bits_weight, granularity, algos, test_case
+    )
+
+  @parameterized.product(
+      granularity=(
+          qtyping.QuantGranularity.CHANNELWISE,
+          qtyping.QuantGranularity.TENSORWISE,
+      ),
+      # get_tensor_quant_params_func, symmetric_weight
+      algos=(
+          (naive_min_max_quantize.get_tensor_quant_params, True),
+          (naive_min_max_quantize.get_tensor_quant_params, False),
+          (octav.get_tensor_quant_params, True),
+      ),
+      test_case=(
+          # 2-bit FULLY_CONNECTED only supports weight-only and DRQ (not SRQ).
+          (_ComputePrecision.FLOAT, False, True),
+          (_ComputePrecision.INTEGER, False, False),
+      ),
+  )
+  def test_materialize_fully_connected_int2_succeeds(
+      self,
+      granularity,
+      algos,
+      test_case,
+  ):
+    self._assert_materialize_fully_connected_succeeds(
+        2, granularity, algos, test_case
     )
 
   @parameterized.product(
