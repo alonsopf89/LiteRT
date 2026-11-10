@@ -13,7 +13,9 @@
 # limitations under the License.
 # ==============================================================================
 
+import functools
 import pathlib
+from typing import cast
 from unittest import mock
 
 from absl.testing import absltest
@@ -23,12 +25,33 @@ import numpy as np
 from litert_quantizer import default_policy
 from litert_quantizer import qtyping
 from litert_quantizer.algorithms.uniform_quantize import common_quantize
+from litert_quantizer.algorithms.uniform_quantize import uniform_quantize_tensor
+from litert_quantizer.algorithms.utils import common_utils
 from litert_quantizer.utils import test_utils
 from litert_quantizer.utils import tfl_flatbuffer_utils
 
 _TEST_DATA_PREFIX_PATH = test_utils.get_path_to_datafile("../../tests/models")
 _TFLOpName = qtyping.TFLOperationName
 _TensorQuantConfig = qtyping.TensorQuantizationConfig
+
+
+def _add_buffer(buffers: list[qtyping.BufferT], arr: np.ndarray) -> int:
+  buf = qtyping.BufferT()
+  buf.data = np.frombuffer(arr.tobytes(), dtype=np.uint8)
+  buffers.append(buf)
+  return len(buffers) - 1
+
+
+def _fixed_activation_quant_params(
+    *unused_args, input_scale: np.ndarray
+) -> qtyping.UniformQuantParams:
+  return qtyping.UniformQuantParams(
+      num_bits=8,
+      quantized_dimension=None,
+      scale=input_scale,
+      zero_point=np.array([0], dtype=np.int32),
+      symmetric=False,
+  )
 
 
 class CommonQuantizeTest(parameterized.TestCase):
@@ -152,6 +175,353 @@ class CommonQuantizeTest(parameterized.TestCase):
       )
       # Should include inputs 0 and 2. Should include output 4.
       self.assertEqual(res, [0, 2, 4])
+
+  def test_check_if_quantized_recognizes_blockwise_quantization_details(self):
+    unquantized = qtyping.TensorT()
+    self.assertFalse(common_quantize.check_if_quantized(unquantized))
+
+    empty_quant = qtyping.TensorT()
+    empty_quant.quantization = qtyping.QuantizationParametersT()
+    self.assertFalse(common_quantize.check_if_quantized(empty_quant))
+
+    scale_quant = qtyping.TensorT()
+    scale_quant.quantization = qtyping.QuantizationParametersT()
+    scale_quant.quantization.scale = [0.5]
+    self.assertTrue(common_quantize.check_if_quantized(scale_quant))
+
+    blockwise_quant = qtyping.TensorT()
+    blockwise_quant.quantization = qtyping.QuantizationParametersT()
+    blockwise_quant.quantization.detailsType = (
+        qtyping.QuantizationDetails.BlockwiseQuantization
+    )
+    blockwise_quant.quantization.details = qtyping.BlockwiseQuantizationT()
+    self.assertTrue(common_quantize.check_if_quantized(blockwise_quant))
+
+  def _build_blockwise_fc_srq_fixture(
+      self,
+      scale_data: np.ndarray | None,
+      scale_type: qtyping.TensorType = qtyping.TensorType.FLOAT32,
+      details_type: int = qtyping.QuantizationDetails.BlockwiseQuantization,
+      include_details: bool = True,
+      op_name: qtyping.TFLOperationName = _TFLOpName.FULLY_CONNECTED,
+      scales_index: int = 4,
+      include_bias_buffer: bool = True,
+      weight_scale_attr: np.ndarray | None = None,
+  ) -> tuple[qtyping.OpInfo, qtyping.GraphInfo]:
+    buffers = [qtyping.BufferT()]
+
+    input_tensor = qtyping.TensorT()
+    input_tensor.name = b"input"
+    input_tensor.shape = [1, 4]
+    input_tensor.type = qtyping.TensorType.FLOAT32
+    input_tensor.buffer = 0
+
+    weight_tensor = qtyping.TensorT()
+    weight_tensor.name = b"weight"
+    weight_tensor.shape = (
+        [1, 1, 1, 2] if op_name == _TFLOpName.DEPTHWISE_CONV_2D else [2, 4]
+    )
+    weight_tensor.type = qtyping.TensorType.INT2
+    weight_tensor.buffer = _add_buffer(buffers, np.zeros(2, dtype=np.uint8))
+    weight_tensor.quantization = qtyping.QuantizationParametersT()
+    weight_tensor.quantization.detailsType = details_type
+    if weight_scale_attr is not None:
+      weight_tensor.quantization.scale = weight_scale_attr
+
+    bias_tensor = qtyping.TensorT()
+    bias_tensor.name = b"bias"
+    bias_tensor.shape = [2]
+    bias_tensor.type = qtyping.TensorType.FLOAT32
+    bias_tensor.buffer = (
+        _add_buffer(buffers, np.array([1.0, -2.0], dtype=np.float32))
+        if include_bias_buffer
+        else 0
+    )
+
+    output_tensor = qtyping.TensorT()
+    output_tensor.name = b"output"
+    output_tensor.shape = [1, 2]
+    output_tensor.type = qtyping.TensorType.FLOAT32
+    output_tensor.buffer = 0
+
+    scales_tensor = qtyping.TensorT()
+    scales_tensor.name = b"weight_scales"
+    scales_tensor.shape = (
+        list(scale_data.shape) if scale_data is not None else [2, 1]
+    )
+    scales_tensor.type = scale_type
+    scales_tensor.buffer = (
+        _add_buffer(buffers, scale_data) if scale_data is not None else 0
+    )
+
+    tensors = [
+        input_tensor,
+        weight_tensor,
+        bias_tensor,
+        output_tensor,
+        scales_tensor,
+    ]
+    if include_details:
+      details = qtyping.BlockwiseQuantizationT()
+      details.scales = scales_index
+      details.zeroPoints = -1
+      weight_tensor.quantization.details = details
+
+    fc_op = qtyping.OperatorT()
+    fc_op.inputs = [0, 1, 2]
+    fc_op.outputs = [3]
+    op_info = qtyping.OpInfo(
+        op=fc_op,
+        op_name=op_name,
+        subgraph_op_index=0,
+        op_quant_config=qtyping.OpQuantizationConfig(
+            activation_tensor_config=_TensorQuantConfig(
+                num_bits=8, symmetric=False
+            ),
+            weight_tensor_config=_TensorQuantConfig(
+                num_bits=2,
+                granularity=qtyping.QuantGranularity.CHANNELWISE,
+            ),
+            compute_precision=qtyping.ComputePrecision.INTEGER,
+        ),
+    )
+    graph_info = qtyping.GraphInfo(subgraph_tensors=tensors, buffers=buffers)
+    return op_info, graph_info
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="tensorwise_float16_scale",
+          op_name=_TFLOpName.FULLY_CONNECTED,
+          scale_data=np.array([[0.5]], dtype=np.float16),
+          scale_type=qtyping.TensorType.FLOAT16,
+          input_scale=np.array([0.25], dtype=np.float16),
+          expected_bias_scale=[0.125],
+          expected_quantized_dim=None,
+          expected_quantized_bias=[8, -16],
+      ),
+      dict(
+          testcase_name="channelwise_centered_int2",
+          op_name=_TFLOpName.FULLY_CONNECTED,
+          scale_data=np.array([[0.5], [2.0]], dtype=np.float32),
+          scale_type=qtyping.TensorType.FLOAT32,
+          input_scale=np.array([0.25], dtype=np.float32),
+          expected_bias_scale=[0.125, 0.5],
+          expected_quantized_dim=0,
+          expected_quantized_bias=[8, -4],
+      ),
+      dict(
+          testcase_name="depthwise_conv2d_channelwise_axis3",
+          op_name=_TFLOpName.DEPTHWISE_CONV_2D,
+          scale_data=np.array([[[[0.5, 2.0]]]], dtype=np.float32),
+          scale_type=qtyping.TensorType.FLOAT32,
+          input_scale=np.array([0.25], dtype=np.float32),
+          expected_bias_scale=[0.125, 0.5],
+          expected_quantized_dim=0,
+          expected_quantized_bias=[8, -4],
+      ),
+      dict(
+          testcase_name="channelwise_empty_weight_scale_vector",
+          op_name=_TFLOpName.FULLY_CONNECTED,
+          scale_data=np.array([[0.5], [2.0]], dtype=np.float32),
+          scale_type=qtyping.TensorType.FLOAT32,
+          input_scale=np.array([0.25], dtype=np.float32),
+          expected_bias_scale=[0.125, 0.5],
+          expected_quantized_dim=0,
+          expected_quantized_bias=[8, -4],
+          weight_scale_attr=np.array([], dtype=np.float32),
+      ),
+  )
+  def test_materialize_fc_conv_bias_with_blockwise_weight_succeeds(
+      self,
+      op_name,
+      scale_data,
+      scale_type,
+      input_scale,
+      expected_bias_scale,
+      expected_quantized_dim,
+      expected_quantized_bias,
+      weight_scale_attr=None,
+  ):
+    op_info, graph_info = self._build_blockwise_fc_srq_fixture(
+        scale_data=scale_data,
+        scale_type=scale_type,
+        op_name=op_name,
+        weight_scale_attr=weight_scale_attr,
+    )
+    get_activation_quant_params = functools.partial(
+        _fixed_activation_quant_params, input_scale=input_scale
+    )
+
+    op_tensor_params = common_quantize.materialize_fc_conv(
+        get_activation_quant_params,
+        op_info,
+        graph_info,
+        tensor_name_to_qsv={},
+        tensor_quant_params_cache=common_utils.TensorQuantParamsCache(),
+    )
+    bias_consumers = op_tensor_params[2].consumers
+    self.assertIsNotNone(bias_consumers)
+    bias_consumers = cast(list[qtyping.OpToTensorParams], bias_consumers)
+    bias_params = bias_consumers[0].parameters
+    self.assertIsInstance(bias_params, qtyping.UniformQuantParams)
+    bias_params = cast(qtyping.UniformQuantParams, bias_params)
+    self.assertEqual(bias_params.scale.dtype, np.float32)
+    np.testing.assert_allclose(
+        bias_params.scale, np.array(expected_bias_scale, dtype=np.float32)
+    )
+    self.assertEqual(bias_params.quantized_dimension, expected_quantized_dim)
+    np.testing.assert_array_equal(
+        bias_params.quantized_data,
+        np.array(expected_quantized_bias, dtype=np.int32),
+    )
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="fully_connected_axis0",
+          op_name=_TFLOpName.FULLY_CONNECTED,
+          scale_data=np.array([[0.5], [2.0]], dtype=np.float32),
+      ),
+      dict(
+          testcase_name="depthwise_conv2d_axis3",
+          op_name=_TFLOpName.DEPTHWISE_CONV_2D,
+          scale_data=np.array([[[[0.5, 2.0]]]], dtype=np.float32),
+      ),
+  )
+  def test_materialize_fc_conv_bias_without_bias_buffer_derives_num_channels(
+      self, op_name, scale_data
+  ):
+    op_info, graph_info = self._build_blockwise_fc_srq_fixture(
+        scale_data=scale_data,
+        op_name=op_name,
+        include_bias_buffer=False,
+    )
+    get_activation_quant_params = functools.partial(
+        _fixed_activation_quant_params,
+        input_scale=np.array([0.25], dtype=np.float32),
+    )
+    mock_bias_params = qtyping.UniformQuantParams(
+        num_bits=32,
+        quantized_dimension=0,
+        scale=np.array([0.125, 0.5], dtype=np.float32),
+        zero_point=np.array([0, 0], dtype=np.int32),
+        symmetric=True,
+    )
+    with mock.patch.object(
+        uniform_quantize_tensor,
+        "symmetric_quantize_bias_tensor",
+        autospec=True,
+        spec_set=True,
+        return_value=mock_bias_params,
+    ) as mock_quantize_bias:
+      op_tensor_params = common_quantize.materialize_fc_conv(
+          get_activation_quant_params,
+          op_info,
+          graph_info,
+          tensor_name_to_qsv={},
+          tensor_quant_params_cache=common_utils.TensorQuantParamsCache(),
+      )
+
+    mock_quantize_bias.assert_called_once()
+    bias_content_arg, _, weight_params_arg = mock_quantize_bias.call_args.args
+    self.assertIsNone(bias_content_arg)
+    np.testing.assert_allclose(
+        weight_params_arg.scale, np.array([0.5, 2.0], dtype=np.float32)
+    )
+    bias_consumers = op_tensor_params[2].consumers
+    self.assertIsNotNone(bias_consumers)
+    bias_consumers = cast(list[qtyping.OpToTensorParams], bias_consumers)
+    self.assertIs(bias_consumers[0].parameters, mock_bias_params)
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="subchannel_blockwise",
+          scale_data=np.array([[0.5, 1.0], [2.0, 4.0]], dtype=np.float32),
+          details_type=qtyping.QuantizationDetails.BlockwiseQuantization,
+          include_details=True,
+          scales_index=4,
+          expected_error=(
+              "SRQ bias materialization requires per-tensor or per-channel"
+              " weight scales"
+          ),
+      ),
+      dict(
+          testcase_name="missing_scale_buffer",
+          scale_data=None,
+          details_type=qtyping.QuantizationDetails.BlockwiseQuantization,
+          include_details=True,
+          scales_index=4,
+          expected_error="BlockwiseQuantization scale tensor has no buffer",
+      ),
+      dict(
+          testcase_name="non_blockwise_details",
+          scale_data=np.array([[0.5], [2.0]], dtype=np.float32),
+          details_type=qtyping.QuantizationDetails.CustomQuantization,
+          include_details=False,
+          scales_index=4,
+          expected_error=(
+              "SRQ bias materialization requires weight scale or"
+              " BlockwiseQuantization details"
+          ),
+      ),
+      dict(
+          testcase_name="missing_blockwise_details",
+          scale_data=np.array([[0.5], [2.0]], dtype=np.float32),
+          details_type=qtyping.QuantizationDetails.BlockwiseQuantization,
+          include_details=False,
+          scales_index=4,
+          expected_error=(
+              "SRQ bias materialization requires weight scale or"
+              " BlockwiseQuantization details"
+          ),
+      ),
+      dict(
+          testcase_name="negative_scale_index",
+          scale_data=np.array([[0.5], [2.0]], dtype=np.float32),
+          details_type=qtyping.QuantizationDetails.BlockwiseQuantization,
+          include_details=True,
+          scales_index=-1,
+          expected_error=(
+              "BlockwiseQuantization scales tensor index -1 out of range"
+          ),
+      ),
+      dict(
+          testcase_name="out_of_bounds_scale_index",
+          scale_data=np.array([[0.5], [2.0]], dtype=np.float32),
+          details_type=qtyping.QuantizationDetails.BlockwiseQuantization,
+          include_details=True,
+          scales_index=5,
+          expected_error=(
+              "BlockwiseQuantization scales tensor index 5 out of range"
+          ),
+      ),
+  )
+  def test_materialize_fc_conv_bias_with_invalid_blockwise_weight_raises(
+      self,
+      scale_data,
+      details_type,
+      include_details,
+      scales_index,
+      expected_error,
+  ):
+    op_info, graph_info = self._build_blockwise_fc_srq_fixture(
+        scale_data=scale_data,
+        details_type=details_type,
+        include_details=include_details,
+        scales_index=scales_index,
+    )
+    get_activation_quant_params = functools.partial(
+        _fixed_activation_quant_params,
+        input_scale=np.array([0.25], dtype=np.float32),
+    )
+
+    with self.assertRaisesRegex(ValueError, expected_error):
+      common_quantize.materialize_fc_conv(
+          get_activation_quant_params,
+          op_info,
+          graph_info,
+          tensor_name_to_qsv={},
+          tensor_quant_params_cache=common_utils.TensorQuantParamsCache(),
+      )
 
 
 if __name__ == "__main__":
