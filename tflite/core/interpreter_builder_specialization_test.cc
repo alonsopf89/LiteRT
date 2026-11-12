@@ -15,6 +15,7 @@ limitations under the License.
 // Tests for InterpreterBuilder::SetSubgraphSpecializations.
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
@@ -36,6 +37,7 @@ namespace impl {
 namespace {
 
 using ::testing::ElementsAre;
+using ::testing::Not;
 using Specialization = InterpreterBuilder::SubgraphSpecialization;
 
 // multi_signatures.bin: subgraph 0 = signature "add" (y = x + 2), subgraph 1
@@ -258,6 +260,180 @@ TEST_F(SpecializationTest, RejectsSourceSignatureOfOtherSubgraph) {
                                       .source_signature_key = "sub",
                                       .input_dims = {{0, {4}}}}}),
             kTfLiteError);
+}
+
+std::vector<uint8_t> FloatBytes(const std::vector<float>& values) {
+  const auto* begin = reinterpret_cast<const uint8_t*>(values.data());
+  return std::vector<uint8_t>(begin, begin + values.size() * sizeof(float));
+}
+
+// Tests for `tensor_dims` and `constant_overrides`. They use the "add"
+// signature of multi_signatures.bin (subgraph 0, y = x + 2).
+class SpecializationOverridesTest : public SpecializationTest {
+ protected:
+  // Builds the model without specializations to look up the tensor indices
+  // the specializations refer to.
+  void SetUp() override {
+    ASSERT_EQ(Build(kMultiSignatures, {}), kTfLiteOk);
+    const Subgraph* add = interpreter_->subgraph(0);
+    ASSERT_EQ(add->inputs().size(), 1);
+    ASSERT_EQ(add->outputs().size(), 1);
+    input_index_ = add->inputs()[0];
+    output_index_ = add->outputs()[0];
+    for (size_t i = 0; i < add->tensors_size(); ++i) {
+      const TfLiteTensor* t = add->tensor(i);
+      if (t->allocation_type == kTfLiteMmapRo && t->type == kTfLiteFloat32 &&
+          t->bytes > 0) {
+        ASSERT_EQ(constant_index_, -1) << "expected a single float constant";
+        constant_index_ = static_cast<int>(i);
+        constant_elements_ = t->bytes / sizeof(float);
+      }
+    }
+    ASSERT_NE(constant_index_, -1);
+  }
+
+  // Runs signature `key` on {1, 2} and returns the two outputs.
+  std::vector<float> RunOnOneTwo(const char* key) {
+    SignatureRunner* runner = interpreter_->GetSignatureRunner(key);
+    if (runner == nullptr) return {};
+    if (runner->ResizeInputTensor("x", {2}) != kTfLiteOk) return {};
+    if (runner->AllocateTensors() != kTfLiteOk) return {};
+    runner->input_tensor("x")->data.f[0] = 1;
+    runner->input_tensor("x")->data.f[1] = 2;
+    if (runner->Invoke() != kTfLiteOk) return {};
+    const float* out = runner->output_tensor("output_0")->data.f;
+    return std::vector<float>(out, out + 2);
+  }
+
+  int input_index_ = -1;
+  int output_index_ = -1;
+  int constant_index_ = -1;
+  size_t constant_elements_ = 0;
+};
+
+TEST_F(SpecializationOverridesTest, ConstantOverrideAffectsCloneOnly) {
+  ASSERT_EQ(
+      Build(kMultiSignatures,
+            {{.source_subgraph_index = 0,
+              .signature_key = "add_10",
+              .input_dims = {{0, {2}}},
+              .constant_overrides = {{constant_index_,
+                                      FloatBytes(std::vector<float>(
+                                          constant_elements_, 10.0f))}}}}),
+      kTfLiteOk);
+  EXPECT_THAT(RunOnOneTwo("add_10"), ElementsAre(11, 12));
+  EXPECT_THAT(RunOnOneTwo("add"), ElementsAre(3, 4));
+
+  const Subgraph* source = interpreter_->subgraph(0);
+  const Subgraph* clone = interpreter_->subgraph(2);
+  const TfLiteTensor* source_constant = source->tensor(constant_index_);
+  const TfLiteTensor* clone_constant = clone->tensor(constant_index_);
+  // The clone owns a private copy that delegates still see as a constant.
+  EXPECT_EQ(clone_constant->allocation_type, kTfLiteMmapRo);
+  EXPECT_NE(clone_constant->data.data, source_constant->data.data);
+  EXPECT_THAT(Dims(clone_constant), Dims(source_constant));
+  // It no longer aliases the model buffer, so it must not be shared by id.
+  EXPECT_EQ(source->GetTensorBufferIdentifiers().count(constant_index_), 1);
+  EXPECT_EQ(clone->GetTensorBufferIdentifiers().count(constant_index_), 0);
+}
+
+TEST_F(SpecializationOverridesTest, ConstantOverrideWithNewDims) {
+  ASSERT_EQ(Build(kMultiSignatures,
+                  {{.source_subgraph_index = 0,
+                    .signature_key = "add_vec",
+                    .input_dims = {{0, {2}}},
+                    .tensor_dims = {{constant_index_, {2}}},
+                    .constant_overrides = {{constant_index_,
+                                            FloatBytes({10.0f, 20.0f})}}}}),
+            kTfLiteOk);
+  EXPECT_THAT(Dims(interpreter_->subgraph(2)->tensor(constant_index_)),
+              ElementsAre(2));
+  EXPECT_THAT(RunOnOneTwo("add_vec"), ElementsAre(11, 22));
+  EXPECT_THAT(RunOnOneTwo("add"), ElementsAre(3, 4));
+}
+
+TEST_F(SpecializationOverridesTest, TensorDimsAreSetWithoutPrepare) {
+  // Without `tensor_dims` the output keeps the shape stored in the model until
+  // the kernels' Prepare runs.
+  ASSERT_EQ(Build(kMultiSignatures, {{.source_subgraph_index = 0,
+                                      .signature_key = "add_4",
+                                      .input_dims = {{0, {4}}}}}),
+            kTfLiteOk);
+  EXPECT_THAT(Dims(interpreter_->subgraph(2)->tensor(output_index_)),
+              Not(ElementsAre(4)));
+
+  ASSERT_EQ(
+      Build(kMultiSignatures,
+            {{.source_subgraph_index = 0,
+              .signature_key = "add_4",
+              .tensor_dims = {{input_index_, {4}}, {output_index_, {4}}}}}),
+      kTfLiteOk);
+  const Subgraph* clone = interpreter_->subgraph(2);
+  EXPECT_THAT(Dims(clone->tensor(input_index_)), ElementsAre(4));
+  EXPECT_THAT(Dims(clone->tensor(output_index_)), ElementsAre(4));
+  // The source keeps the model's shapes.
+  EXPECT_THAT(Dims(interpreter_->subgraph(0)->tensor(output_index_)),
+              Not(ElementsAre(4)));
+
+  SignatureRunner* runner = interpreter_->GetSignatureRunner("add_4");
+  ASSERT_NE(runner, nullptr);
+  ASSERT_EQ(runner->AllocateTensors(), kTfLiteOk);
+  EXPECT_THAT(Dims(runner->output_tensor("output_0")), ElementsAre(4));
+  for (int i = 0; i < 4; ++i) runner->input_tensor("x")->data.f[i] = i;
+  ASSERT_EQ(runner->Invoke(), kTfLiteOk);
+  const float* out = runner->output_tensor("output_0")->data.f;
+  EXPECT_THAT(std::vector<float>(out, out + 4), ElementsAre(2, 3, 4, 5));
+}
+
+TEST_F(SpecializationOverridesTest, ReplaceOverridesSourceInPlace) {
+  ASSERT_EQ(
+      Build(kMultiSignatures,
+            {{.source_subgraph_index = 0,
+              .constant_overrides = {{constant_index_,
+                                      FloatBytes(std::vector<float>(
+                                          constant_elements_, 10.0f))}}}}),
+      kTfLiteOk);
+  EXPECT_EQ(interpreter_->subgraphs_size(), 2);
+  EXPECT_THAT(RunOnOneTwo("add"), ElementsAre(11, 12));
+}
+
+TEST_F(SpecializationOverridesTest, RejectsTensorIndexOutOfRange) {
+  EXPECT_EQ(Build(kMultiSignatures, {{.source_subgraph_index = 0,
+                                      .signature_key = "x",
+                                      .tensor_dims = {{999, {4}}}}}),
+            kTfLiteError);
+  EXPECT_EQ(Build(kMultiSignatures,
+                  {{.source_subgraph_index = 0,
+                    .signature_key = "x",
+                    .constant_overrides = {{999, FloatBytes({1.0f})}}}}),
+            kTfLiteError);
+}
+
+TEST_F(SpecializationOverridesTest, RejectsConstantOverrideOfNonConstant) {
+  EXPECT_EQ(
+      Build(kMultiSignatures,
+            {{.source_subgraph_index = 0,
+              .signature_key = "x",
+              .constant_overrides = {{input_index_, FloatBytes({1.0f})}}}}),
+      kTfLiteError);
+}
+
+TEST_F(SpecializationOverridesTest, RejectsConstantOverrideTooSmallForDims) {
+  EXPECT_EQ(Build(kMultiSignatures,
+                  {{.source_subgraph_index = 0,
+                    .signature_key = "x",
+                    .tensor_dims = {{constant_index_, {3}}},
+                    .constant_overrides = {{constant_index_,
+                                            FloatBytes({1.0f, 2.0f})}}}}),
+            kTfLiteError);
+}
+
+TEST_F(SpecializationOverridesTest, RejectsReshapingConstantWithoutContents) {
+  EXPECT_EQ(
+      Build(kMultiSignatures, {{.source_subgraph_index = 0,
+                                .signature_key = "x",
+                                .tensor_dims = {{constant_index_, {7}}}}}),
+      kTfLiteError);
 }
 
 }  // namespace
