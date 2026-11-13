@@ -910,6 +910,61 @@ class CalibrationModesParityTest(parameterized.TestCase):
             f'Output mismatch for {sig_key}:{output_name}',
         )
 
+  @parameterized.parameters(
+      _CalibrationMode.CALIBRATION_PRESERVE_ALL_TENSORS,
+      _CalibrationMode.CALIBRATION_PROFILER_BASED,
+  )
+  def test_signatureless_model_matches_signature_model(self, mode):
+    model_path = str(
+        pathlib.Path(TEST_DATA_PREFIX_PATH) / 'tests/models/single_fc.tflite'
+    )
+    signatureless_model = test_utils.read_model_without_signatures(model_path)
+    samples = [
+        _RNG.uniform(-1.0, 1.0, size=(1, 8)).astype(np.float32)
+        for _ in range(4)
+    ]
+
+    def calibrate_and_quantize(float_model, input_name):
+      qt = quantizer.Quantizer(float_model)
+      qt.add_static_config(
+          regex='.*',
+          operation_name=_TFLOpName.ALL_SUPPORTED,
+          activation_num_bits=8,
+          weight_num_bits=8,
+      )
+      calib_result = qt.calibrate(
+          {
+              tfl_interpreter_utils.DEFAULT_SIGNATURE_KEY: [
+                  {input_name: x} for x in samples
+              ]
+          },
+          mode=mode,
+      )
+      return qt.quantize(calib_result).quantized_model
+
+    expected_model = calibrate_and_quantize(model_path, 'input_1')
+    # Without signatures, inputs are keyed by tensor name.
+    actual_model = calibrate_and_quantize(
+        signatureless_model, 'serving_default_input_1'
+    )
+
+    actual_interpreter = tfl_interpreter_utils.create_tfl_interpreter(
+        actual_model
+    )
+    self.assertEmpty(actual_interpreter.get_signature_list())
+    expected_output = tfl_interpreter_utils.invoke_interpreter_signature(
+        tfl_interpreter_utils.create_tfl_interpreter(expected_model),
+        {'input_1': samples[0]},
+    )
+    actual_output = tfl_interpreter_utils.invoke_interpreter_signature(
+        actual_interpreter, {'serving_default_input_1': samples[0]}
+    )
+    self.assertEqual(list(actual_output), ['StatefulPartitionedCall:0'])
+    np.testing.assert_array_equal(
+        actual_output['StatefulPartitionedCall:0'],
+        next(iter(expected_output.values())),
+    )
+
 
 if __name__ == '__main__':
   absltest.main()

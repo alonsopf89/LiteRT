@@ -23,6 +23,7 @@ from typing import Optional, Union
 
 from absl.testing import parameterized
 
+from ai_edge_litert.tools import flatbuffer_utils
 from litert_quantizer import model_validator
 from litert_quantizer import qtyping
 from litert_quantizer import quantizer
@@ -88,6 +89,20 @@ def get_path_to_datafile(path):
   """
   data_files_path = _pathlib.Path(_inspect.getfile(_sys._getframe(1))).parent  # pylint: disable=protected-access
   return str((data_files_path / path).resolve())
+
+
+def read_model_without_signatures(model_path: str) -> bytes:
+  """Returns the TFLite model at `model_path` with its signatures removed.
+
+  Args:
+    model_path: Path to a TFLite model.
+
+  Returns:
+    The serialized model without signature defs.
+  """
+  model = flatbuffer_utils.read_model(model_path)
+  model.signatureDefs = []
+  return bytes(flatbuffer_utils.convert_object_to_bytearray(model))
 
 
 class BaseOpTestCase(parameterized.TestCase):
