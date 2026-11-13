@@ -92,7 +92,7 @@ bool CanLowerBatchMatMulToFullyConnected(const graph::TensorInformation& rhs,
     return false;
   }
   // Non-zero (integer or float) zero points dequantize the values to floats.
-  return !pcq->HasNonZeroZeroPoints();
+  return pcq->zero_points.IsSymmetric();
 }
 
 absl::StatusOr<BinaryIOIds> PrepareBinaryIO(const Operation& op,
@@ -720,7 +720,7 @@ absl::Status OpMixin<FullyConnectedOperation, XnnpackMixinTag>::ToXnnpack(
             weights_info->quantization->As<PerChannelAffineQuantization>();
         pcq.ok()) {
       weights_are_quantized =
-          weights_info->type == Type::kI2 || !pcq->HasNonZeroZeroPoints();
+          weights_info->type == Type::kI2 || pcq->zero_points.IsSymmetric();
     } else {
       weights_are_quantized = true;
     }

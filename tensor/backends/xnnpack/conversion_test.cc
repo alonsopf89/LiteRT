@@ -16,8 +16,10 @@ limitations under the License.
 #include "tensor/backends/xnnpack/conversion.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include <gmock/gmock.h>
@@ -183,6 +185,54 @@ TEST(XnnpackConversionTest, L2NormalizationReturnsUnimplemented) {
   XnnTensor output = L2Normalization(input);
 
   EXPECT_THAT(BuildXnnpackGraph({output}),
+              StatusIs(absl::StatusCode::kUnimplemented));
+}
+
+TEST(XnnpackConversionTest, BlockwiseScalarZeroPointWithEmptyScales) {
+  XnnTensor weights(TensorInit{
+      .name = "weights",
+      .type = Type::kI4,
+      .shape = {0, 32},
+      .quantization = std::make_shared<BlockwiseQuantization>(
+          std::vector<float>{}, ZeroPoints::Int({8}),
+          /*block_size=*/32, /*quantized_dimension=*/0)});
+  XnnpackBuildContext ctx({}, {});
+  ASSERT_THAT(ctx.Init(), ::testing::tensor::IsOk());
+  EXPECT_THAT(ctx.DefineValue(weights.GetRaw()).status(),
+              ::testing::tensor::IsOk());
+}
+
+TEST(XnnpackConversionTest, BlockwiseEmptyScalesRejectsMultipleZeroPoints) {
+  XnnTensor weights(TensorInit{
+      .name = "weights",
+      .type = Type::kI4,
+      .shape = {0, 32},
+      .quantization = std::make_shared<BlockwiseQuantization>(
+          std::vector<float>{}, ZeroPoints::Int({8, 8}),
+          /*block_size=*/32, /*quantized_dimension=*/0)});
+  XnnpackBuildContext ctx({}, {});
+  ASSERT_THAT(ctx.Init(), ::testing::tensor::IsOk());
+  EXPECT_THAT(ctx.DefineValue(weights.GetRaw()).status(),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST(XnnpackConversionTest, BlockwiseUniformAndNonUniformZeroPoints) {
+  auto build_fc = [&](ZeroPoints zero_points) {
+    XnnTensor input({.name = "input", .type = Type::kFP32, .shape = {1, 32}});
+    XnnTensor weights(TensorInit{
+        .name = "weights",
+        .type = Type::kI4,
+        .shape = {2, 32},
+        .buffer = std::vector<int8_t>(32, 0),
+        .quantization = std::make_shared<BlockwiseQuantization>(
+            std::vector<float>{0.5f, 0.25f}, std::move(zero_points),
+            /*block_size=*/32, /*quantized_dimension=*/0)});
+    XnnTensor output = FullyConnected(input, weights);
+    return BuildXnnpackGraph({output});
+  };
+
+  EXPECT_THAT(build_fc(ZeroPoints::Int({8, 8})), ::testing::tensor::IsOk());
+  EXPECT_THAT(build_fc(ZeroPoints::Int({8, 5})),
               StatusIs(absl::StatusCode::kUnimplemented));
 }
 
