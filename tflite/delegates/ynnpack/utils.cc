@@ -290,6 +290,32 @@ bool IsSupportedQuantization(const TfLiteTensor& tensor, bool allow_per_channel,
     if (params->blocksize == 0 && !allow_per_channel) return false;
     return true;
   }
+  if (tensor.quantization.type == kTfLiteBlockwiseQuantizationV2) {
+    if (!allow_per_channel && !allow_blockwise) return false;
+    const auto* params = static_cast<const TfLiteBlockwiseQuantizationV2*>(
+        tensor.quantization.params);
+    if (!params) return false;
+    if (params->scale < 0) return false;
+    if (!params->block_shape || !tensor.dims) return false;
+    if (params->block_shape->size != tensor.dims->size) return false;
+    bool is_per_channel = false;
+    bool is_blockwise = false;
+    for (int i = 0; i < params->block_shape->size; ++i) {
+      const int b = params->block_shape->data[i];
+      const int dim = tensor.dims->data[i];
+      if (b <= 0) return false;
+      if (b < dim) {
+        if (b == 1) {
+          is_per_channel = true;
+        } else {
+          is_blockwise = true;
+        }
+      }
+    }
+    if (is_blockwise && !allow_blockwise) return false;
+    if (!is_blockwise && is_per_channel && !allow_per_channel) return false;
+    return true;
+  }
   if (tensor.quantization.type != kTfLiteAffineQuantization) return false;
   const auto* params =
       static_cast<const TfLiteAffineQuantization*>(tensor.quantization.params);
