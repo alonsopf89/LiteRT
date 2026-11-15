@@ -14,11 +14,14 @@
 
 """Python type stubs for the LiteRT environment wrapper."""
 
+from typing import Optional
+
 def CreateEnvironment(
         runtime_path: str = ...,
         compiler_plugin_path: str = ...,
         dispatch_library_path: str = ...,
-        compiler_cache_dir: str = ...
+        compiler_cache_dir: str = ...,
+        min_logger_severity: Optional[int] = ...
 ) -> object:
     """Creates a LiteRT environment capsule."""
     ...
