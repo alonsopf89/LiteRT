@@ -956,6 +956,72 @@ PyObject* CompiledModelWrapper::IsFullyAccelerated() {
   return PyBool_FromLong(*is_fully_accelerated_or ? 1 : 0);
 }
 
+PyObject* CompiledModelWrapper::IsNonCpuFullyAccelerated() {
+  auto is_non_cpu_fully_accelerated_or =
+      compiled_model_->IsNonCpuFullyAccelerated();
+  if (!is_non_cpu_fully_accelerated_or) {
+    return ConvertErrorToPyExc(is_non_cpu_fully_accelerated_or.Error());
+  }
+  return PyBool_FromLong(*is_non_cpu_fully_accelerated_or ? 1 : 0);
+}
+
+PyObject* CompiledModelWrapper::GetDelegationMetrics() {
+  auto metrics_or = compiled_model_->GetDelegationMetrics();
+  if (!metrics_or) {
+    return ConvertErrorToPyExc(metrics_or.Error());
+  }
+  const auto& metrics = *metrics_or;
+
+  PyObject* result = PyDict_New();
+  if (result == nullptr) {
+    return nullptr;
+  }
+  if (!SetDictItemStringSteal(result, "total_node_count",
+                              PyLong_FromLong(metrics.total_node_count))) {
+    Py_DECREF(result);
+    return nullptr;
+  }
+
+  PyObject* accelerators_list =
+      PyList_New(static_cast<Py_ssize_t>(metrics.accelerators.size()));
+  if (accelerators_list == nullptr) {
+    Py_DECREF(result);
+    return nullptr;
+  }
+  for (size_t i = 0; i < metrics.accelerators.size(); ++i) {
+    const auto& acc = metrics.accelerators[i];
+    PyObject* acc_dict = PyDict_New();
+    if (acc_dict == nullptr) {
+      Py_DECREF(accelerators_list);
+      Py_DECREF(result);
+      return nullptr;
+    }
+    if (!SetDictItemStringSteal(
+            acc_dict, "accelerator_name",
+            PyUnicode_FromStringAndSize(acc.accelerator_name.data(),
+                                        acc.accelerator_name.size())) ||
+        !SetDictItemStringSteal(acc_dict, "hardware_type",
+                                PyLong_FromLong(acc.hardware_type)) ||
+        !SetDictItemStringSteal(acc_dict, "delegated_node_count",
+                                PyLong_FromLong(acc.delegated_node_count)) ||
+        !SetDictItemStringSteal(acc_dict, "partition_count",
+                                PyLong_FromLong(acc.partition_count))) {
+      Py_DECREF(acc_dict);
+      Py_DECREF(accelerators_list);
+      Py_DECREF(result);
+      return nullptr;
+    }
+    PyList_SetItem(accelerators_list, static_cast<Py_ssize_t>(i),
+                   acc_dict);  // steal ref
+  }
+
+  if (!SetDictItemStringSteal(result, "accelerators", accelerators_list)) {
+    Py_DECREF(result);
+    return nullptr;
+  }
+  return result;
+}
+
 PyObject* CompiledModelWrapper::RunByName(const char* signature_key,
                                           PyObject* input_map,
                                           PyObject* output_map) {

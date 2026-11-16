@@ -85,6 +85,14 @@ class CompiledModelWrapper:
         """Returns whether the compiled model is fully accelerated."""
         ...
 
+    def IsNonCpuFullyAccelerated(self) -> bool:
+        """Returns whether the compiled model is fully accelerated on non-CPU hardware."""
+        ...
+
+    def GetDelegationMetrics(self) -> Dict[str, Any]:
+        """Returns delegation metrics for the compiled model."""
+        ...
+
     def CreateInputBufferByName(self, sig_key: str, in_name: str) -> object:
         """Creates an input buffer for the specified signature and input name.
 

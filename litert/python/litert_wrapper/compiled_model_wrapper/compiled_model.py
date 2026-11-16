@@ -323,6 +323,20 @@ class CompiledModel:
     """Returns whether the compiled model is fully accelerated."""
     return bool(self._model.IsFullyAccelerated())
 
+  def is_non_cpu_fully_accelerated(self) -> bool:
+    """Returns whether the model is 100% delegated to non-CPU hardware."""
+    return bool(self._model.IsNonCpuFullyAccelerated())
+
+  def get_delegation_metrics(self) -> dict[str, Any]:
+    """Returns delegation metrics for the compiled model.
+
+    Returns:
+      Dictionary containing 'total_node_count' and 'accelerators' (a list of
+      per-accelerator dictionaries with 'accelerator_name', 'hardware_type',
+      'delegated_node_count', and 'partition_count').
+    """
+    return self._model.GetDelegationMetrics()
+
   def create_input_buffer_by_name(
       self, signature_key: str, input_name: str
   ) -> TensorBuffer:
