@@ -29,7 +29,6 @@ void RegisterSingleOps(const AtsConf& options, size_t& test_id,
 void RegisterSingleOps(const AtsConf& options, size_t& test_id,
                        AtsCompileTest::Capture& cap);
 
-
 }  // namespace litert::testing
 
 #endif  // THIRD_PARTY_ODML_LITERT_LITERT_ATS_REGISTER_SINGLE_OPS_H_

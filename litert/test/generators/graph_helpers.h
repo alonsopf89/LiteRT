@@ -21,6 +21,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -37,6 +38,7 @@
 #include "litert/test/generators/common.h"
 #include "tensor/backends/tflite/tflite_flatbuffer_conversion.h"
 #include "tensor/tensor.h"
+#include "tflite/schema/schema_generated.h"
 
 namespace litert::testing {
 
@@ -56,6 +58,37 @@ struct TensorDetails {
   LiteRtElementType element_type;
   std::string name;
   std::optional<OwningBufferRef<uint8_t>> data = std::nullopt;
+  std::optional<Quantization> quantization = std::nullopt;
+};
+
+template <typename T, typename TensorType>
+inline void MaybeSetQuant(TensorType& t, float scale = 0.02f,
+                          int64_t zero_point = 0) {
+  if constexpr (std::is_same_v<T, int8_t> || std::is_same_v<T, int16_t>) {
+    t.SetQuantization(
+        std::make_shared<litert::tensor::PerChannelAffineQuantization>(
+            std::vector<float>{scale}, std::vector<int64_t>{zero_point}, 0));
+  }
+}
+
+template <typename T, typename TensorType>
+inline void MaybeSetQuant(TensorType& t, const AffineQuantSpec& spec) {
+  MaybeSetQuant<T>(t, spec.scale, spec.zero_point);
+}
+
+template <typename T>
+inline void MaybeSetTensorDetailsQuant(TensorDetails& td,
+                                       const AffineQuantSpec& spec = {0.02f,
+                                                                      0}) {
+  if constexpr (std::is_same_v<T, int8_t> || std::is_same_v<T, int16_t>) {
+    td.quantization = MakePerTensorQuantization(spec.scale, spec.zero_point);
+  }
+}
+
+// Explicit operator version tag so version selection never collides with
+// variadic FlatBuffer option arguments in SingleOpModel<OpCode>.
+struct OpVersion {
+  int32_t value = 1;
 };
 
 template <LiteRtOpCode OpCode>
@@ -67,8 +100,14 @@ struct OpDetails {
   using OptionsT = typename FbTypes::OptionsT;
 
   template <typename... Args>
-  explicit OpDetails(Args... args)
+  explicit OpDetails(Args&&... args)
       : options(OptionsT{{}, std::forward<Args>(args)...}) {}
+
+  static OpDetails FromOptions(OptionsT opts) {
+    OpDetails details;
+    details.options = std::move(opts);
+    return details;
+  }
 
   OpDetails() = default;
 
@@ -92,29 +131,20 @@ struct OpDetails {
   OptionsT options;
 };
 
-// Build a single op model with the given specification.
-// NOTE: `inputs` are op inputs. Only non constant inputs will be added
-// as subgraph inputs.
-template <LiteRtOpCode OpCode, typename... Args>
-Expected<LiteRtModelT::Ptr> SingleOpModel(
+inline Expected<LiteRtModelT::Ptr> BuildSingleOpModelImpl(
+    LiteRtOpCode op_code, TflOpCodePtr tfl_code, TflOptions opts,
     const std::vector<TensorDetails>& inputs,
-    const std::vector<TensorDetails>& outputs, Args&&... args) {
-  using Op = OpDetails<OpCode>;
-  Op op_details(std::forward<Args>(args)...);
-
+    const std::vector<TensorDetails>& outputs) {
   LiteRtModelT model;
   std::vector<TflOpCodePtr> tfl_codes;
 
   auto& sg = model.EmplaceSubgraph();
 
   auto& op = sg.EmplaceOp();
-  {
-    op.SetOpCode(OpCode);
-    auto options = op_details.MakeTflOptions();
-    internal::SetTflOptions(op, op_details.MakeTflOptions());
-    internal::SetTflOpCodeInd(op, tfl_codes.size());
-    tfl_codes.push_back(op_details.MakeTflCode());
-  }
+  op.SetOpCode(op_code);
+  internal::SetTflOptions(op, std::move(opts));
+  internal::SetTflOpCodeInd(op, tfl_codes.size());
+  tfl_codes.push_back(std::move(tfl_code));
 
   std::vector<std::string> input_names;
   std::vector<LiteRtTensor> input_tensors;
@@ -122,6 +152,9 @@ Expected<LiteRtModelT::Ptr> SingleOpModel(
     auto& tensor = sg.EmplaceTensor();
     tensor.SetType(::MakeRankedTensorType(input.element_type, input.dims));
     tensor.SetName(input.name);
+    if (input.quantization) {
+      tensor.SetQarams(*input.quantization);
+    }
 
     if (input.data) {
       ::SetWeightsFromUnownedBuffer(tensor.Weights(), *input.data);
@@ -140,6 +173,9 @@ Expected<LiteRtModelT::Ptr> SingleOpModel(
     auto& tensor = sg.EmplaceTensor();
     tensor.SetType(::MakeRankedTensorType(output.element_type, output.dims));
     tensor.SetName(output.name);
+    if (output.quantization) {
+      tensor.SetQarams(*output.quantization);
+    }
     output_names.push_back(output.name);
     sg.Outputs().push_back(&tensor);
     output_tensors.push_back(&tensor);
@@ -152,6 +188,49 @@ Expected<LiteRtModelT::Ptr> SingleOpModel(
   SetTflOpCodes(model, std::move(tfl_codes));
   LITERT_ASSIGN_OR_RETURN(auto serialized, SerializeModel(std::move(model)));
   return LoadModelFromBuffer(std::move(serialized));
+}
+
+// Build a single op model with the given specification.
+// NOTE: `inputs` are op inputs. Only non constant inputs will be added
+// as subgraph inputs.
+template <LiteRtOpCode OpCode, typename... Args>
+Expected<LiteRtModelT::Ptr> SingleOpModel(
+    const std::vector<TensorDetails>& inputs,
+    const std::vector<TensorDetails>& outputs, OpVersion version,
+    Args&&... args) {
+  using Op = OpDetails<OpCode>;
+  Op op_details(std::forward<Args>(args)...);
+  auto tfl_code = op_details.MakeTflCode();
+  tfl_code->version = version.value;
+  return BuildSingleOpModelImpl(OpCode, std::move(tfl_code),
+                                op_details.MakeTflOptions(), inputs, outputs);
+}
+
+template <LiteRtOpCode OpCode, typename... Args,
+          typename = std::enable_if_t<std::negation_v<std::disjunction<
+              std::is_same<std::decay_t<Args>, OpVersion>...>>>>
+Expected<LiteRtModelT::Ptr> SingleOpModel(
+    const std::vector<TensorDetails>& inputs,
+    const std::vector<TensorDetails>& outputs, Args&&... args) {
+  using Op = OpDetails<OpCode>;
+  Op op_details(std::forward<Args>(args)...);
+  return BuildSingleOpModelImpl(OpCode, op_details.MakeTflCode(),
+                                op_details.MakeTflOptions(), inputs, outputs);
+}
+
+// Builds a single op model from a strongly typed FlatBuffer OptionsT derived
+// from `OpCode` via `FbOpTypes<OpCode>`, preventing opcode/option mismatches.
+template <LiteRtOpCode OpCode>
+Expected<LiteRtModelT::Ptr> SingleOpModelWithOptions(
+    const std::vector<TensorDetails>& inputs,
+    const std::vector<TensorDetails>& outputs,
+    typename FbOpTypes<OpCode>::OptionsT opts, OpVersion version = {}) {
+  using Op = OpDetails<OpCode>;
+  auto op_details = Op::FromOptions(std::move(opts));
+  auto tfl_code = op_details.MakeTflCode();
+  tfl_code->version = version.value;
+  return BuildSingleOpModelImpl(OpCode, std::move(tfl_code),
+                                op_details.MakeTflOptions(), inputs, outputs);
 }
 
 // Saves a litert::tensor tracing graph into an expected LiteRtModelT pointer,

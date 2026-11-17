@@ -28,6 +28,7 @@
 #include "litert/c/internal/litert_logging.h"
 #include "litert/c/litert_common.h"
 #include "litert/core/model/model.h"
+#include "litert/core/model/ops/op_shape_inference_utils.h"
 #include "litert/core/model/shape_inference_types.h"
 #include "tflite/converter/schema/schema_generated.h"
 #include "tflite/kernels/internal/runtime_shape.h"
@@ -106,12 +107,30 @@ DEFINE_SIMPLE_BINARY_INFER(Sub)
 
 inline void ComputeBroadcastStrides(const int32_t* dims, int input_rank,
                                     int output_rank, size_t* strides) {
-  size_t current_stride = 1;
-  for (int i = output_rank - 1; i >= 0; --i) {
-    int idx = i - (output_rank - input_rank);
-    int32_t dim = (idx >= 0) ? dims[idx] : 1;
-    strides[i] = (dim == 1) ? 0 : current_stride;
-    current_stride *= dim;
+  if (input_rank < 0 || output_rank < 0 || input_rank > output_rank) {
+    for (int i = 0; i < output_rank; ++i) {
+      strides[i] = 0;
+    }
+    return;
+  }
+  std::vector<int32_t> synthetic_out(output_rank, 1);
+  const int rank_diff = output_rank - input_rank;
+  for (int i = 0; i < input_rank; ++i) {
+    synthetic_out[i + rank_diff] = dims[i];
+  }
+  const auto in_span = input_rank == 0 ? absl::Span<const int32_t>{}
+                                       : absl::MakeConstSpan(dims, input_rank);
+  std::vector<size_t> checked_strides;
+  size_t total_out = 0;
+  if (ComputeBroadcastStridesChecked(in_span, synthetic_out, checked_strides,
+                                     total_out) != kLiteRtStatusOk) {
+    for (int i = 0; i < output_rank; ++i) {
+      strides[i] = 0;
+    }
+    return;
+  }
+  for (int i = 0; i < output_rank; ++i) {
+    strides[i] = checked_strides[i];
   }
 }
 
@@ -150,13 +169,10 @@ void RunBinaryOp(const InT* a, const InT* b, OutT* output,
 }
 
 template <typename InT, typename OutT, typename BinaryOp>
-inline void ReferenceBinaryGeneric(const InT* input1_data,
-                                   const int32_t* input1_dims, int input1_rank,
-                                   const InT* input2_data,
-                                   const int32_t* input2_dims, int input2_rank,
-                                   OutT* output_data,
-                                   const int32_t* output_dims, int rank,
-                                   BinaryOp op) {
+inline void ReferenceBinaryGeneric(
+    const InT* input1_data, const int32_t* input1_dims, int input1_rank,
+    const InT* input2_data, const int32_t* input2_dims, int input2_rank,
+    OutT* output_data, const int32_t* output_dims, int rank, BinaryOp op) {
   constexpr int kMaxRank = tflite::RuntimeShape::kMaxSmallSize;
   assert(rank <= kMaxRank);
   size_t a_stride[kMaxRank];
@@ -318,6 +334,113 @@ inline void ReferenceLessEqual(const T* a_data, const int32_t* a_dims,
                                int rank) {
   ReferenceBinaryGeneric(a_data, a_dims, a_rank, b_data, b_dims, b_rank,
                          output_data, output_dims, rank, std::less_equal<T>());
+}
+
+template <typename T>
+inline void ReferenceFloorDiv(const T* a_data, const int32_t* a_dims,
+                              int a_rank, const T* b_data,
+                              const int32_t* b_dims, int b_rank, T* output_data,
+                              const int32_t* output_dims, int rank) {
+  ReferenceBinaryGeneric(a_data, a_dims, a_rank, b_data, b_dims, b_rank,
+                         output_data, output_dims, rank, [](T a, T b) -> T {
+                           if constexpr (std::is_floating_point_v<T>) {
+                             return static_cast<T>(std::floor(a / b));
+                           } else {
+                             T q = a / b;
+                             T r = a % b;
+                             if (r != 0 && ((a < 0) != (b < 0))) {
+                               --q;
+                             }
+                             return q;
+                           }
+                         });
+}
+
+template <typename T>
+inline void ReferenceFloorMod(const T* a_data, const int32_t* a_dims,
+                              int a_rank, const T* b_data,
+                              const int32_t* b_dims, int b_rank, T* output_data,
+                              const int32_t* output_dims, int rank) {
+  ReferenceBinaryGeneric(a_data, a_dims, a_rank, b_data, b_dims, b_rank,
+                         output_data, output_dims, rank, [](T a, T b) -> T {
+                           if constexpr (std::is_floating_point_v<T>) {
+                             return static_cast<T>(a - std::floor(a / b) * b);
+                           } else {
+                             T q = a / b;
+                             T r = a % b;
+                             if (r != 0 && ((a < 0) != (b < 0))) {
+                               --q;
+                             }
+                             return a - q * b;
+                           }
+                         });
+}
+
+inline void ReferenceLogicalAnd(const bool* a_data, const int32_t* a_dims,
+                                int a_rank, const bool* b_data,
+                                const int32_t* b_dims, int b_rank,
+                                bool* output_data, const int32_t* output_dims,
+                                int rank) {
+  ReferenceBinaryGeneric(a_data, a_dims, a_rank, b_data, b_dims, b_rank,
+                         output_data, output_dims, rank, std::logical_and<>());
+}
+
+inline void ReferenceLogicalOr(const bool* a_data, const int32_t* a_dims,
+                               int a_rank, const bool* b_data,
+                               const int32_t* b_dims, int b_rank,
+                               bool* output_data, const int32_t* output_dims,
+                               int rank) {
+  ReferenceBinaryGeneric(a_data, a_dims, a_rank, b_data, b_dims, b_rank,
+                         output_data, output_dims, rank, std::logical_or<>());
+}
+
+template <typename T>
+inline void ReferenceBitwiseXor(const T* a_data, const int32_t* a_dims,
+                                int a_rank, const T* b_data,
+                                const int32_t* b_dims, int b_rank,
+                                T* output_data, const int32_t* output_dims,
+                                int rank) {
+  ReferenceBinaryGeneric(a_data, a_dims, a_rank, b_data, b_dims, b_rank,
+                         output_data, output_dims, rank, std::bit_xor<T>());
+}
+
+template <typename T>
+inline void ReferenceRightShift(const T* a_data, const int32_t* a_dims,
+                                int a_rank, const T* b_data,
+                                const int32_t* b_dims, int b_rank,
+                                T* output_data, const int32_t* output_dims,
+                                int rank) {
+  ReferenceBinaryGeneric(a_data, a_dims, a_rank, b_data, b_dims, b_rank,
+                         output_data, output_dims, rank,
+                         [](T a, T b) -> T { return a >> b; });
+}
+
+template <typename T>
+inline void ReferencePrelu(const T* input_data, const T* alpha_data,
+                           T* output_data, size_t num_elements, size_t channels,
+                           const AffineQuantSpec& input_quant = {},
+                           const AffineQuantSpec& alpha_quant = {},
+                           const AffineQuantSpec& output_quant = {}) {
+  for (size_t i = 0; i < num_elements; ++i) {
+    const float x = DequantizeValue(input_data[i], input_quant);
+    const float a = DequantizeValue(alpha_data[i % channels], alpha_quant);
+    const float y = x >= 0.0f ? x : a * x;
+    output_data[i] = QuantizeValue<T>(y, output_quant);
+  }
+}
+
+template <typename T>
+inline void ReferenceAddN(absl::Span<const T* const> inputs, T* output_data,
+                          size_t num_elements,
+                          const AffineQuantSpec& input_quant = {},
+                          const AffineQuantSpec& output_quant = {}) {
+  for (size_t i = 0; i < num_elements; ++i) {
+    float sum = 0.0f;
+    for (const T* in_ptr : inputs) {
+      sum += DequantizeValue(in_ptr[i], input_quant);
+    }
+    output_data[i] = QuantizeValue<T>(sum, output_quant);
+  }
 }
 
 }  // namespace litert::internal

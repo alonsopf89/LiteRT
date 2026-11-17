@@ -675,5 +675,139 @@ TEST(SliceOpTest, StridedSlice1DConstantPropagationSkipsShortAndNarrowBuffers) {
   }
 }
 
+TEST(SliceOpTest, ReferenceStridedSliceMasksAndStrides) {
+  const std::vector<int32_t> input = {0, 1, 2, 3, 4, 5};
+  const int32_t dims[] = {2, 3};
+
+  // Positive slice with begin_mask=1, end_mask=1 on axis 0 and [1:3] on axis 1.
+  {
+    const int32_t begin[] = {0, 1};
+    const int32_t end[] = {0, 3};
+    const int32_t strides[] = {1, 1};
+    std::vector<int32_t> out(4, -1);
+    ASSERT_EQ(ReferenceStridedSlice(input.data(), dims, 2, begin, end, strides,
+                                    /*begin_mask=*/1, /*end_mask=*/1,
+                                    /*ellipsis_mask=*/0, /*new_axis_mask=*/0,
+                                    /*shrink_axis_mask=*/0, out.data()),
+              kLiteRtStatusOk);
+    EXPECT_THAT(out, ElementsAre(1, 2, 4, 5));
+  }
+
+  // shrink_axis_mask=1 selects row 1 -> [3, 4, 5].
+  {
+    const int32_t begin[] = {1, 0};
+    const int32_t end[] = {2, 3};
+    const int32_t strides[] = {1, 1};
+    std::vector<int32_t> out(3, -1);
+    ASSERT_EQ(ReferenceStridedSlice(input.data(), dims, 2, begin, end, strides,
+                                    /*begin_mask=*/0, /*end_mask=*/0,
+                                    /*ellipsis_mask=*/0, /*new_axis_mask=*/0,
+                                    /*shrink_axis_mask=*/1, out.data()),
+              kLiteRtStatusOk);
+    EXPECT_THAT(out, ElementsAre(3, 4, 5));
+  }
+
+  // Negative stride on axis 1 with begin_mask=2 and end_mask=2 reverses rows.
+  {
+    const int32_t begin[] = {0, 0};
+    const int32_t end[] = {2, 0};
+    const int32_t strides[] = {1, -1};
+    std::vector<int32_t> out(6, -1);
+    ASSERT_EQ(ReferenceStridedSlice(input.data(), dims, 2, begin, end, strides,
+                                    /*begin_mask=*/2, /*end_mask=*/2,
+                                    /*ellipsis_mask=*/0, /*new_axis_mask=*/0,
+                                    /*shrink_axis_mask=*/0, out.data()),
+              kLiteRtStatusOk);
+    EXPECT_THAT(out, ElementsAre(2, 1, 0, 5, 4, 3));
+  }
+}
+
+TEST(SliceOpTest, ReferenceStridedSliceRejectsUnsupportedMasksAndInvalidArgs) {
+  const std::vector<int32_t> input = {0, 1, 2, 3, 4, 5};
+  const int32_t dims[] = {2, 3};
+  const int32_t begin[] = {0, 1};
+  const int32_t end[] = {0, 2};
+  const int32_t strides[] = {1, 1};
+  std::vector<int32_t> out(2, -1);
+
+  // Explicit contract: ellipsis_mask and new_axis_mask return unsupported
+  // instead of silently leaving output untouched.
+  EXPECT_EQ(ReferenceStridedSlice(input.data(), dims, 2, begin, end, strides,
+                                  /*begin_mask=*/0, /*end_mask=*/0,
+                                  /*ellipsis_mask=*/1, /*new_axis_mask=*/0,
+                                  /*shrink_axis_mask=*/0, out.data()),
+            kLiteRtStatusErrorUnsupported);
+  EXPECT_EQ(ReferenceStridedSlice(input.data(), dims, 2, begin, end, strides,
+                                  /*begin_mask=*/0, /*end_mask=*/0,
+                                  /*ellipsis_mask=*/0, /*new_axis_mask=*/1,
+                                  /*shrink_axis_mask=*/0, out.data()),
+            kLiteRtStatusErrorUnsupported);
+
+  // Zero stride, negative rank, and rank >= 31 (mask shift overflow) are
+  // rejected.
+  const int32_t zero_strides[] = {0, 1};
+  EXPECT_EQ(ReferenceStridedSlice(input.data(), dims, 2, begin, end,
+                                  zero_strides, 0, 0, 0, 0, 0, out.data()),
+            kLiteRtStatusErrorInvalidArgument);
+  EXPECT_EQ(ReferenceStridedSlice(input.data(), dims, -1, begin, end, strides,
+                                  0, 0, 0, 0, 0, out.data()),
+            kLiteRtStatusErrorInvalidArgument);
+  const std::vector<int32_t> rank31_dims(31, 1);
+  const std::vector<int32_t> rank31_zeros(31, 0);
+  const std::vector<int32_t> rank31_ones(31, 1);
+  EXPECT_EQ(
+      ReferenceStridedSlice(input.data(), rank31_dims.data(), 31,
+                            rank31_zeros.data(), rank31_ones.data(),
+                            rank31_ones.data(), 0, 0, 0, 0, 0, out.data()),
+      kLiteRtStatusErrorInvalidArgument);
+}
+
+TEST(SliceOpTest, ReferenceStridedSliceHandlesExtremeInt32Strides) {
+  const std::vector<int32_t> input = {10, 20, 30, 40};
+  const int32_t dims[] = {4};
+  const int32_t begin[] = {0};
+  const int32_t end[] = {4};
+
+  // Large positive stride (INT32_MAX): selects only index 0 without overflow.
+  {
+    const int32_t max_stride[] = {std::numeric_limits<int32_t>::max()};
+    std::vector<int32_t> out(1, -1);
+    ASSERT_EQ(ReferenceStridedSlice(input.data(), dims, 1, begin, end,
+                                    max_stride, /*begin_mask=*/0,
+                                    /*end_mask=*/0, /*ellipsis_mask=*/0,
+                                    /*new_axis_mask=*/0,
+                                    /*shrink_axis_mask=*/0, out.data()),
+              kLiteRtStatusOk);
+    EXPECT_THAT(out, ElementsAre(10));
+  }
+
+  // Minimum negative stride (INT32_MIN) with full-axis masks: selects only the
+  // last element without signed negation or ceiling-division overflow.
+  {
+    const int32_t min_stride[] = {std::numeric_limits<int32_t>::min()};
+    std::vector<int32_t> out(1, -1);
+    ASSERT_EQ(ReferenceStridedSlice(input.data(), dims, 1, begin, end,
+                                    min_stride, /*begin_mask=*/1,
+                                    /*end_mask=*/1, /*ellipsis_mask=*/0,
+                                    /*new_axis_mask=*/0,
+                                    /*shrink_axis_mask=*/0, out.data()),
+              kLiteRtStatusOk);
+    EXPECT_THAT(out, ElementsAre(40));
+  }
+
+  // Large negative stride (-INT32_MAX): selects only index 3 without overflow.
+  {
+    const int32_t neg_max_stride[] = {-std::numeric_limits<int32_t>::max()};
+    std::vector<int32_t> out(1, -1);
+    ASSERT_EQ(ReferenceStridedSlice(input.data(), dims, 1, begin, end,
+                                    neg_max_stride, /*begin_mask=*/1,
+                                    /*end_mask=*/1, /*ellipsis_mask=*/0,
+                                    /*new_axis_mask=*/0,
+                                    /*shrink_axis_mask=*/0, out.data()),
+              kLiteRtStatusOk);
+    EXPECT_THAT(out, ElementsAre(40));
+  }
+}
+
 }  // namespace
 }  // namespace litert::internal

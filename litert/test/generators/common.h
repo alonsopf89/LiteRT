@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <random>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -38,8 +39,10 @@
 #include "litert/cc/internal/litert_rng.h"
 #include "litert/cc/litert_buffer_ref.h"
 #include "litert/cc/litert_expected.h"
+#include "litert/cc/litert_layout.h"
 #include "litert/cc/litert_options.h"
 #include "litert/core/model/model.h"
+#include "litert/core/model/ops/op_shape_inference_utils.h"
 #include "litert/core/model/shape_inference_types.h"
 #include "litert/core/util/flatbuffer_tools.h"
 #include "litert/test/simple_buffer.h"
@@ -275,7 +278,49 @@ using FbOpTypes =
         std::bool_constant<OpCode == kLiteRtOpCodeTflPad>,
             FbOpTraits<tflite::PadOptionsT,
                        tflite::BuiltinOperator_PAD,
-                       tflite::BuiltinOptions_PadOptions>
+                       tflite::BuiltinOptions_PadOptions>,
+        std::bool_constant<OpCode == kLiteRtOpCodeTflAddN>,
+            FbOpTraits<tflite::AddNOptionsT,
+                       tflite::BuiltinOperator_ADD_N,
+                       tflite::BuiltinOptions_AddNOptions>,
+        std::bool_constant<OpCode == kLiteRtOpCodeTflArgMin>,
+            FbOpTraits<tflite::ArgMinOptionsT,
+                       tflite::BuiltinOperator_ARG_MIN,
+                       tflite::BuiltinOptions_ArgMinOptions>,
+        std::bool_constant<OpCode == kLiteRtOpCodeTflArgMax>,
+            FbOpTraits<tflite::ArgMaxOptionsT,
+                       tflite::BuiltinOperator_ARG_MAX,
+                       tflite::BuiltinOptions_ArgMaxOptions>,
+        std::bool_constant<OpCode == kLiteRtOpCodeTflMirrorPad>,
+            FbOpTraits<tflite::MirrorPadOptionsT,
+                       tflite::BuiltinOperator_MIRROR_PAD,
+                       tflite::BuiltinOptions_MirrorPadOptions>,
+        std::bool_constant<OpCode == kLiteRtOpCodeTflSplitV>,
+            FbOpTraits<tflite::SplitVOptionsT,
+                       tflite::BuiltinOperator_SPLIT_V,
+                       tflite::BuiltinOptions_SplitVOptions>,
+        std::bool_constant<OpCode == kLiteRtOpCodeTflStridedSlice>,
+            FbOpTraits<tflite::StridedSliceOptionsT,
+                       tflite::BuiltinOperator_STRIDED_SLICE,
+                       tflite::BuiltinOptions_StridedSliceOptions>,
+        std::bool_constant<OpCode == kLiteRtOpCodeTflResizeBilinear>,
+            FbOpTraits<tflite::ResizeBilinearOptionsT,
+                       tflite::BuiltinOperator_RESIZE_BILINEAR,
+                       tflite::BuiltinOptions_ResizeBilinearOptions>,
+        std::bool_constant<OpCode == kLiteRtOpCodeTflResizeNearestNeighbor>,
+            FbOpTraits<tflite::ResizeNearestNeighborOptionsT,
+                       tflite::BuiltinOperator_RESIZE_NEAREST_NEIGHBOR,
+                       tflite::BuiltinOptions_ResizeNearestNeighborOptions>,
+        std::bool_constant<OpCode == kLiteRtOpCodeTflSpaceToBatchNd>,
+            FbOpTraitsNoOptions<tflite::BuiltinOperator_SPACE_TO_BATCH_ND>,
+        std::bool_constant<OpCode == kLiteRtOpCodeTflBatchToSpaceNd>,
+            FbOpTraitsNoOptions<tflite::BuiltinOperator_BATCH_TO_SPACE_ND>,
+        std::bool_constant<OpCode == kLiteRtOpCodeTflBroadcastTo>,
+            FbOpTraitsNoOptions<tflite::BuiltinOperator_BROADCAST_TO>,
+        std::bool_constant<OpCode == kLiteRtOpCodeTflTransposeConv>,
+            FbOpTraits<tflite::TransposeConvOptionsT,
+                       tflite::BuiltinOperator_TRANSPOSE_CONV,
+                       tflite::BuiltinOptions_TransposeConvOptions>
     >;
 // clang-format on
 static_assert(FbOpTypes<kLiteRtOpCodeTflAdd>::kHasOptions);
@@ -493,6 +538,105 @@ inline void PackFromFloat(absl::Span<const float> src, absl::Span<T> dst) {
   for (size_t i = 0; i < src.size(); ++i) {
     dst[i] = static_cast<T>(src[i]);
   }
+}
+
+using ::litert::internal::AffineQuantSpec;
+using ::litert::internal::DequantizeValue;
+using ::litert::internal::QuantizeValue;
+using ::litert::internal::QuantizeValueFromDouble;
+
+// Samples two broadcast-compatible shapes (`shape1`, `shape2`) and computes
+// their broadcasted `output_shape`.
+template <size_t Rank1, size_t Rank2, typename Rng>
+inline void SampleBroadcastShapes(
+    Rng& rng, std::array<Layout::Dim, Rank1>& shape1,
+    std::array<Layout::Dim, Rank2>& shape2,
+    std::array<Layout::Dim, std::max(Rank1, Rank2)>& output_shape,
+    int32_t min_dim, int32_t max_dim, double broadcast_prob = 0.35,
+    bool force_broadcast = false, bool unidirectional_rhs_to_lhs = false) {
+  constexpr size_t kMaxRank = std::max(Rank1, Rank2);
+  std::uniform_int_distribution<int32_t> dim_dist(min_dim, max_dim);
+  std::bernoulli_distribution bcast_dist(broadcast_prob);
+  std::bernoulli_distribution side_dist(0.5);
+  bool has_broadcast = (Rank1 != Rank2);
+
+  for (size_t i = 0; i < kMaxRank; ++i) {
+    output_shape[i] = dim_dist(rng);
+  }
+  const size_t d1 = kMaxRank - Rank1;
+  const size_t d2 = kMaxRank - Rank2;
+  for (size_t i = 0; i < kMaxRank; ++i) {
+    const bool in1 = i >= d1;
+    const bool in2 = i >= d2;
+    if (in1 && in2) {
+      const bool must_bcast =
+          force_broadcast && !has_broadcast && (i + 1 == kMaxRank);
+      if (must_bcast || bcast_dist(rng)) {
+        if (!unidirectional_rhs_to_lhs && side_dist(rng)) {
+          shape1[i - d1] = 1;
+          shape2[i - d2] = output_shape[i];
+        } else {
+          shape1[i - d1] = output_shape[i];
+          shape2[i - d2] = 1;
+        }
+        if (shape1[i - d1] != shape2[i - d2]) {
+          has_broadcast = true;
+        }
+      } else {
+        shape1[i - d1] = output_shape[i];
+        shape2[i - d2] = output_shape[i];
+      }
+    } else if (in1) {
+      shape1[i - d1] = output_shape[i];
+    } else if (in2) {
+      shape2[i - d2] = unidirectional_rhs_to_lhs ? 1 : output_shape[i];
+    }
+    const Layout::Dim s1 = in1 ? shape1[i - d1] : 1;
+    const Layout::Dim s2 = in2 ? shape2[i - d2] : 1;
+    output_shape[i] = std::max(s1, s2);
+  }
+}
+
+inline ConformanceSpec ExactSpec() {
+  ConformanceSpec spec;
+  spec.comparator_kind = ConformanceComparatorKind::kExact;
+  return spec;
+}
+
+template <typename T>
+inline Expected<SimpleBuffer> MakeRandomBuffer(
+    absl::Span<const Layout::Dim> shape, DefaultDevice& device,
+    const RandomTensorDataBuilder& data_builder, float min_val = -10.0f,
+    float max_val = 10.0f) {
+  RandomTensorDataBuilder b = data_builder;
+  if constexpr (std::is_floating_point_v<T>) {
+    if (!b.IsFloatDummy()) {
+      b.SetFloatRange(min_val, max_val);
+    }
+  }
+  auto buf = SimpleBuffer::Create<T>(shape);
+  if (!buf) {
+    return buf.Error();
+  }
+  auto status = buf->template WriteRandom<T>(b, device);
+  if (!status) {
+    return status.Error();
+  }
+  return std::move(*buf);
+}
+
+template <typename T>
+inline Expected<VarBuffers> MakeSingleRandomInput(
+    absl::Span<const Layout::Dim> shape, DefaultDevice& device,
+    const RandomTensorDataBuilder& data_builder, float min_val = -10.0f,
+    float max_val = 10.0f) {
+  VarBuffers inputs;
+  auto buf = MakeRandomBuffer<T>(shape, device, data_builder, min_val, max_val);
+  if (!buf) {
+    return buf.Error();
+  }
+  inputs.push_back(std::move(*buf));
+  return inputs;
 }
 
 }  // namespace litert::testing

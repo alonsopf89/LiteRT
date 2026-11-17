@@ -17,12 +17,14 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 #include "SafeInt.hpp"  // from @SafeInt
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/litert_common.h"
 #include "litert/core/model/model.h"
+#include "litert/core/model/ops/op_shape_inference_utils.h"
 #include "litert/core/model/shape_inference_types.h"
 
 namespace litert::internal {
@@ -73,6 +75,76 @@ inline LiteRtStatus InferSplit(const LiteRtOpT& op,
   // Assume generic split if axis unknown.
   output_shapes[0] = Dims(input_shape.size(), -1);
   return kLiteRtStatusOk;
+}
+
+template <typename T>
+inline void ReferenceSplitV(const T* input_data, const int32_t* input_dims,
+                            int input_rank, int32_t axis,
+                            absl::Span<const int32_t> split_sizes,
+                            absl::Span<T* const> outputs) {
+  if (input_rank <= 0 || input_dims == nullptr ||
+      outputs.size() < split_sizes.size()) {
+    return;
+  }
+  AxisLayout layout;
+  if (ComputeAxisLayout(absl::MakeConstSpan(input_dims, input_rank), axis,
+                        layout) != kLiteRtStatusOk) {
+    return;
+  }
+  size_t total_split = 0;
+  for (size_t s = 0; s < split_sizes.size(); ++s) {
+    if (split_sizes[s] < 0 ||
+        !SafeAdd(total_split, static_cast<size_t>(split_sizes[s]),
+                 total_split) ||
+        total_split > layout.axis_size) {
+      return;
+    }
+  }
+  if (layout.outer_size == 0 || layout.inner_size == 0 || split_sizes.empty()) {
+    return;
+  }
+  if (total_split > 0 && input_data == nullptr) {
+    return;
+  }
+  for (size_t s = 0; s < split_sizes.size(); ++s) {
+    if (split_sizes[s] > 0 && outputs[s] == nullptr) {
+      return;
+    }
+  }
+  for (size_t o = 0; o < layout.outer_size; ++o) {
+    size_t in_offset = o * layout.axis_size * layout.inner_size;
+    for (size_t s = 0; s < split_sizes.size(); ++s) {
+      const size_t chunk =
+          static_cast<size_t>(split_sizes[s]) * layout.inner_size;
+      if (chunk > 0) {
+        std::memcpy(outputs[s] + o * chunk, input_data + in_offset,
+                    chunk * sizeof(T));
+      }
+      in_offset += chunk;
+    }
+  }
+}
+
+template <typename T>
+inline void ReferenceSplit(const T* input_data, const int32_t* input_dims,
+                           int input_rank, int32_t axis,
+                           absl::Span<T* const> outputs) {
+  if (input_rank <= 0 || input_dims == nullptr || outputs.empty()) {
+    return;
+  }
+  AxisLayout layout;
+  if (ComputeAxisLayout(absl::MakeConstSpan(input_dims, input_rank), axis,
+                        layout) != kLiteRtStatusOk) {
+    return;
+  }
+  if (layout.axis_size % outputs.size() != 0) {
+    return;
+  }
+  const int32_t split_size =
+      static_cast<int32_t>(layout.axis_size / outputs.size());
+  std::vector<int32_t> split_sizes(outputs.size(), split_size);
+  ReferenceSplitV<T>(input_data, input_dims, input_rank, axis, split_sizes,
+                     outputs);
 }
 
 }  // namespace litert::internal

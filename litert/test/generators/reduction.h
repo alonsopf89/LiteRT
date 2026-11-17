@@ -37,7 +37,6 @@
 #include "litert/c/litert_op_code.h"
 #include "litert/cc/internal/litert_detail.h"
 #include "litert/cc/internal/litert_rng.h"
-#include "litert/cc/litert_buffer_ref.h"
 #include "litert/cc/litert_element_type.h"
 #include "litert/cc/litert_expected.h"
 #include "litert/cc/litert_layout.h"
@@ -110,7 +109,8 @@ struct OpDetails<kLiteRtOpCodeTflSum>
 };
 
 template <typename Rank, typename T, typename OpCode,
-          typename KeepDims = std::false_type>
+          typename KeepDims = std::false_type,
+          typename AllowScalarOutput = std::true_type>
 class Reduction : public TestGraph {
  private:
   static_assert(std::is_same_v<typename OpCode::value_type, LiteRtOpCode>);
@@ -120,19 +120,23 @@ class Reduction : public TestGraph {
   static constexpr size_t kRank = Rank::value;
 
   static constexpr bool kKeepDims = KeepDims::value;
+  static constexpr bool kAllowScalarOutput = AllowScalarOutput::value;
+  static_assert(kAllowScalarOutput || kKeepDims || kRank >= 2,
+                "Disallowing scalar reduction output with KeepDims=false "
+                "requires Rank >= 2.");
 
   static constexpr TensorNames<1> kInputNames = {"input"};
   static constexpr TensorNames<1> kOutputNames = {"output"};
 
   static constexpr ElementType kElementType = GetElementType<T>();
 
+ public:
   struct Params {
     std::array<Layout::Dim, kRank> input_shape;
     std::vector<int32_t> axes;
     std::vector<Layout::Dim> output_shape;
   };
 
- public:
   using Traits = TestLogicTraits<TypeList<T>, TypeList<T>, Params>;
   using Ptr = std::unique_ptr<Reduction>;
 
@@ -142,12 +146,15 @@ class Reduction : public TestGraph {
   static Expected<Reduction::Ptr> Create(Rng& rng) {
     Params params;
     params.input_shape.fill(1);
-    std::uniform_int_distribution<int> dim_dist(2, 10);
+    std::uniform_int_distribution<int> dim_dist(
+        2, std::is_same_v<T, bool> ? 6 : 10);
     for (size_t i = 0; i < kRank; ++i) {
       params.input_shape[i] = dim_dist(rng);
     }
 
-    std::uniform_int_distribution<size_t> num_axes_dist(1, kRank);
+    const size_t max_axes =
+        (kAllowScalarOutput || kKeepDims) ? kRank : (kRank - 1);
+    std::uniform_int_distribution<size_t> num_axes_dist(1, max_axes);
     size_t num_axes = num_axes_dist(rng);
 
     // Select random axes to reduce.
@@ -164,43 +171,52 @@ class Reduction : public TestGraph {
       }
     }
     params.axes = std::move(reduce_axes);
+    return Create(std::move(params));
+  }
 
-    // Leverage shape inference to compute output shape
-    LiteRtOpT op;
-    op.SetOpCode(kOpCode);
-    auto options = std::make_unique<tflite::ReducerOptionsT>();
-    options->keep_dims = kKeepDims;
+  static Expected<Reduction::Ptr> Create(Params params) {
+    // Leverage shape inference to compute output shape when not supplied.
+    if (params.output_shape.empty()) {
+      LiteRtOpT op;
+      op.SetOpCode(kOpCode);
+      auto options = std::make_unique<tflite::ReducerOptionsT>();
+      options->keep_dims = kKeepDims;
 
-    TflOptions tfl_opts;
-    tfl_opts.type = tflite::BuiltinOptions_ReducerOptions;
-    tfl_opts.value = options.release();
-    litert::internal::SetTflOptions(op, std::move(tfl_opts));
+      TflOptions tfl_opts;
+      tfl_opts.type = tflite::BuiltinOptions_ReducerOptions;
+      tfl_opts.value = options.release();
+      litert::internal::SetTflOptions(op, std::move(tfl_opts));
 
-    LiteRtTensorT axis_tensor;
-    std::vector<int32_t> axes_data(params.axes.begin(), params.axes.end());
-    OwningBufferRef<uint8_t> axes_buf(
-        reinterpret_cast<const uint8_t*>(axes_data.data()),
-        axes_data.size() * sizeof(int32_t));
-    SetWeightsFromOwnedBuffer(axis_tensor.Weights(), std::move(axes_buf));
-    LiteRtTensorT dummy_input;
-    op.Inputs().push_back(&dummy_input);
-    op.Inputs().push_back(&axis_tensor);
+      LiteRtTensorT axis_tensor;
+      SetWeightsFromOwnedBuffer(axis_tensor.Weights(),
+                                MakeOwningBufferRef(params.axes));
+      LiteRtTensorT dummy_input;
+      op.Inputs().push_back(&dummy_input);
+      op.Inputs().push_back(&axis_tensor);
 
-    std::vector<litert::internal::Dims> input_shapes = {
-        {params.input_shape.begin(), params.input_shape.begin() + kRank},
-        {static_cast<int32_t>(axes_data.size())}};
-    std::vector<litert::internal::Dims> output_shapes(1);
+      std::vector<litert::internal::Dims> input_shapes = {
+          {params.input_shape.begin(), params.input_shape.begin() + kRank},
+          {static_cast<int32_t>(params.axes.size())}};
+      std::vector<litert::internal::Dims> output_shapes(1);
 
-    LITERT_RETURN_IF_ERROR(litert::internal::InferReduce(
-        op, absl::MakeSpan(input_shapes), output_shapes));
+      LITERT_RETURN_IF_ERROR(litert::internal::InferReduce(
+          op, absl::MakeSpan(input_shapes), output_shapes));
 
-    params.output_shape = {output_shapes[0].begin(), output_shapes[0].end()};
+      params.output_shape = {output_shapes[0].begin(), output_shapes[0].end()};
+    }
 
     LITERT_ASSIGN_OR_RETURN(auto model, BuildGraph(params));
     return std::make_unique<Reduction>(std::move(params), std::move(model));
   }
 
   bool HasReference() const override { return true; }
+
+  ConformanceSpec GetConformanceSpec() const override {
+    if constexpr (std::is_same_v<T, bool>) {
+      return ExactSpec();
+    }
+    return TestGraph::GetConformanceSpec();
+  }
 
   Expected<VarBuffers> MakeInputs(
       DefaultDevice& device,
@@ -286,14 +302,10 @@ class Reduction : public TestGraph {
                              params.input_shape.begin() + kRank),
         LiteRtElementType(kElementType), std::string(kInputNames[0])};
 
-    OwningBufferRef<uint8_t> axes_buf(
-        reinterpret_cast<const uint8_t*>(params.axes.data()),
-        params.axes.size() * sizeof(int32_t));
-
     op_inputs[1] = TensorDetails{{static_cast<int32_t>(params.axes.size())},
                                  kLiteRtElementTypeInt32,
                                  "axes",
-                                 std::move(axes_buf)};
+                                 MakeOwningBufferRef(params.axes)};
 
     op_outputs[0] = TensorDetails{
         std::vector<int32_t>(params.output_shape.begin(),

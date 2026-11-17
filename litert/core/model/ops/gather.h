@@ -278,6 +278,52 @@ inline void ReferenceGather(const T* input_data, const int32_t* input_dims,
   }
 }
 
+template <typename T, typename IndexT = int32_t>
+inline void ReferenceGatherNd(const T* params_data, const int32_t* params_dims,
+                              int params_rank, const IndexT* indices_data,
+                              const int32_t* indices_dims, int indices_rank,
+                              T* output_data) {
+  if (indices_rank <= 0 || params_rank <= 0) {
+    return;
+  }
+  const int index_depth = indices_dims[indices_rank - 1];
+  if (index_depth <= 0 || index_depth > params_rank) {
+    return;
+  }
+  size_t num_slices = 1;
+  for (int i = 0; i < indices_rank - 1; ++i) {
+    num_slices *= static_cast<size_t>(indices_dims[i]);
+  }
+  size_t slice_size = 1;
+  for (int i = index_depth; i < params_rank; ++i) {
+    slice_size *= static_cast<size_t>(params_dims[i]);
+  }
+  std::vector<size_t> params_strides(params_rank, 1);
+  for (int i = params_rank - 2; i >= 0; --i) {
+    params_strides[i] =
+        params_strides[i + 1] * static_cast<size_t>(params_dims[i + 1]);
+  }
+  for (size_t s = 0; s < num_slices; ++s) {
+    const IndexT* idx_ptr = indices_data + s * index_depth;
+    bool in_bounds = true;
+    size_t offset = 0;
+    for (int d = 0; d < index_depth; ++d) {
+      const IndexT coord = idx_ptr[d];
+      if (coord < 0 || coord >= params_dims[d]) {
+        in_bounds = false;
+        break;
+      }
+      offset += static_cast<size_t>(coord) * params_strides[d];
+    }
+    if (in_bounds) {
+      std::memcpy(output_data + s * slice_size, params_data + offset,
+                  slice_size * sizeof(T));
+    } else {
+      std::memset(output_data + s * slice_size, 0, slice_size * sizeof(T));
+    }
+  }
+}
+
 }  // namespace litert::internal
 
 #endif  // ODML_LITERT_LITERT_CORE_MODEL_OPS_GATHER_H_

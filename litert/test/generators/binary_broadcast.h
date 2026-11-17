@@ -100,53 +100,11 @@ class BinaryBroadcast : public TestGraph {
   template <typename Rng>
   static Expected<BinaryBroadcast::Ptr> Create(Rng& rng) {
     Params params;
-    std::uniform_int_distribution<int> dim_dist(2, 10);
-    std::bernoulli_distribution flip_dist(0.5);
-    bool has_broadcast = false;
-
-    // Fill both shapes with random sizes initially.
-    for (size_t i = 0; i < kRank1; ++i) {
-      params.input1_shape[i] = dim_dist(rng);
-    }
-    for (size_t i = 0; i < kRank2; ++i) {
-      params.input2_shape[i] = dim_dist(rng);
-    }
-
-    // Enforce compatibility scanning from right to left.
-    for (size_t i = 1; i <= kMaxRank; ++i) {
-      int idx1 = static_cast<int>(kRank1) - static_cast<int>(i);
-      int idx2 = static_cast<int>(kRank2) - static_cast<int>(i);
-
-      if (idx1 >= 0 && idx2 >= 0) {
-        // Both shapes have this dimension!
-        bool force_broadcast = (i == 1) && !has_broadcast;
-
-        if (flip_dist(rng) || force_broadcast) {
-          // Make one of them 1.
-          if constexpr (kOpCode == kLiteRtOpCodeTflPrelu) {
-            params.input2_shape[idx2] = 1;
-          } else {
-            if (flip_dist(rng)) {
-              params.input2_shape[idx2] = 1;
-            } else {
-              params.input1_shape[idx1] = 1;
-            }
-          }
-          has_broadcast = true;
-        } else {
-          // Make them equal!
-          params.input2_shape[idx2] = params.input1_shape[idx1];
-        }
-      } else if (idx2 >= 0) {
-        // Input 2 has dimension, but Input 1 does not.
-        if constexpr (kOpCode == kLiteRtOpCodeTflPrelu) {
-          // For Prelu, Alpha (input2) must be broadcastable to Input 1.
-          params.input2_shape[idx2] = 1;
-        }
-      }
-      // If only one has the dimension, no constraint needed (other is virtually
-      // 1).
-    }
+    SampleBroadcastShapes<kRank1, kRank2>(
+        rng, params.input1_shape, params.input2_shape, params.output_shape,
+        /*min_dim=*/2, /*max_dim=*/10, /*broadcast_prob=*/0.5,
+        /*force_broadcast=*/true,
+        /*unidirectional_rhs_to_lhs=*/kOpCode == kLiteRtOpCodeTflPrelu);
 
     // Leverage shape inference to compute output shape
     std::vector<litert::internal::Dims> input_shapes = {

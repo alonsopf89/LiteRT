@@ -34,11 +34,10 @@ template <typename Fixture>
 void RegisterMoeExpertsImpl(const AtsConf& options, size_t& test_id,
                             size_t iters, typename Fixture::Capture& cap) {
   // 7-input layout (per-channel affine quantization on weights).
-  RegisterCombinations<
-      Fixture, MoeExperts, TypeList<float, tflite::half>,
-      TypeList<float, tflite::half, int8_t, litert::tensor::int4_t,
-               litert::tensor::int2_t>,
-      TypeList<std::false_type>>(iters, test_id, options, cap);
+  RegisterCombinations<Fixture, MoeExperts, TypeList<float, tflite::half>,
+                       TypeList<float, tflite::half, int8_t,
+                                litert::tensor::int4_t, litert::tensor::int2_t>,
+                       TypeList<std::false_type>>(iters, test_id, options, cap);
 
   // 10-input layout (explicit per-expert scale tensors).
   RegisterCombinations<

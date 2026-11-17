@@ -15,6 +15,7 @@
 #ifndef ODML_LITERT_LITERT_CORE_MODEL_OPS_EXPAND_DIMS_H_
 #define ODML_LITERT_LITERT_CORE_MODEL_OPS_EXPAND_DIMS_H_
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <utility>
@@ -52,6 +53,12 @@ inline LiteRtStatus InferExpandDims(const ShapeInferenceContext& ctx,
 
   result.output_shapes[0] = std::move(output_shape);
   return kLiteRtStatusOk;
+}
+
+template <typename T>
+inline void ReferenceExpandDims(const T* input_data, size_t num_elements,
+                                T* output_data) {
+  std::copy_n(input_data, num_elements, output_data);
 }
 
 }  // namespace litert::internal

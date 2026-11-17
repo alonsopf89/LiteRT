@@ -26,6 +26,7 @@
 #include "litert/c/litert_common.h"
 #include "litert/cc/litert_buffer_ref.h"
 #include "litert/core/model/model.h"
+#include "litert/core/model/ops/op_shape_inference_utils.h"
 #include "litert/core/model/shape_inference_types.h"
 #include "litert/core/util/flatbuffer_tools.h"
 #include "tflite/schema/schema_generated.h"
@@ -988,6 +989,50 @@ TEST(ConvolutionOpTest,
       InferConv3DTranspose(op, absl::MakeSpan(tconv3d_inputs), output_shapes),
       kLiteRtStatusOk);
   EXPECT_THAT(output_shapes[0], ElementsAre(1, -1, -1, -1, 2));
+}
+
+TEST(ConvolutionOpTest, ReferenceTransposeConvFloatAndQuantized) {
+  // 1x1x1x1 input with 1x2x2x1 filter (stride 1, pad 0) -> 1x2x2x1 output.
+  {
+    const float input[] = {2.0f};
+    const float filter[] = {-2.0f, 1.0f, 3.0f, 5.0f};
+    const float bias[] = {1.0f};
+    std::vector<float> out(4, 0.0f);
+    ReferenceTransposeConv(input, filter, bias, out.data(), /*batch=*/1,
+                           /*in_h=*/1, /*in_w=*/1, /*in_c=*/1, /*out_h=*/2,
+                           /*out_w=*/2, /*out_c=*/1, /*filter_h=*/2,
+                           /*filter_w=*/2, /*stride_h=*/1, /*stride_w=*/1,
+                           /*pad_t=*/0, /*pad_l=*/0,
+                           tflite::ActivationFunctionType_RELU6);
+    // Pre-activation: [-3, 3, 7, 11] -> RELU6: [0, 3, 6, 6].
+    EXPECT_THAT(out, ElementsAre(0.0f, 3.0f, 6.0f, 6.0f));
+  }
+
+  // Quantized int8 TransposeConv with non-zero zero-point, bias, and RELU.
+  {
+    // input_q = 15, zp = 5 -> (15 - 5) = 10; scale = 0.5 -> real 5.0
+    // filter_q = {-3, 2, 1, 4}, weight_scale = 0.25 -> effective_scale = 0.125
+    // acc = {-30, 20, 10, 40}, bias = {2} -> {-28, 22, 12, 42}
+    // real = {-3.5, 2.75, 1.5, 5.25}; RELU -> {0.0, 2.75, 1.5, 5.25}
+    // output_scale = 0.5, output_zp = -10 -> round(real/0.5) - 10
+    //   0.0  -> 0 - 10 = -10
+    //   2.75 -> llround(5.5) - 10 = 6 - 10 = -4
+    //   1.5  -> 3 - 10 = -7
+    //   5.25 -> llround(10.5) - 10 = 11 - 10 = 1
+    const int8_t input[] = {15};
+    const int8_t filter[] = {-3, 2, 1, 4};
+    const int32_t bias[] = {2};
+    std::vector<int8_t> out(4, 0);
+    ReferenceTransposeConvQuantized<int8_t, int8_t, int32_t>(
+        input, filter, bias, out.data(), /*batch=*/1, /*in_h=*/1, /*in_w=*/1,
+        /*in_c=*/1, /*out_h=*/2, /*out_w=*/2, /*out_c=*/1, /*filter_h=*/2,
+        /*filter_w=*/2, /*stride_h=*/1, /*stride_w=*/1, /*pad_t=*/0,
+        /*pad_l=*/0, tflite::ActivationFunctionType_RELU,
+        AffineQuantSpec{/*scale=*/0.5f, /*zero_point=*/5},
+        /*weight_scale=*/0.25f,
+        AffineQuantSpec{/*scale=*/0.5f, /*zero_point=*/-10});
+    EXPECT_THAT(out, ElementsAre(-10, -4, -7, 1));
+  }
 }
 
 }  // namespace

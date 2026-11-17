@@ -19,6 +19,9 @@
 #include "litert/ats/compile_fixture.h"
 #include "litert/ats/configure.h"
 #include "litert/ats/inference_fixture.h"
+#include "litert/ats/register_activations.h"
+#include "litert/ats/register_arg_min_max.h"
+#include "litert/ats/register_arithmetic_ops.h"
 #include "litert/ats/register_batch_matmul.h"
 #include "litert/ats/register_binary_broadcast.h"
 #include "litert/ats/register_binary_no_bcast.h"
@@ -27,16 +30,23 @@
 #include "litert/ats/register_conv_2d.h"
 #include "litert/ats/register_depthwise_conv_2d.h"
 #include "litert/ats/register_fully_connected.h"
+#include "litert/ats/register_indexing.h"
+#include "litert/ats/register_logical_bitwise.h"
 #include "litert/ats/register_mean.h"
 #include "litert/ats/register_one_hot.h"
+#include "litert/ats/register_pack_split.h"
 #include "litert/ats/register_pad.h"
 #include "litert/ats/register_pooling.h"
+#include "litert/ats/register_quantize_cast.h"
 #include "litert/ats/register_reduction.h"
 #include "litert/ats/register_reshape.h"
 #include "litert/ats/register_select_v2.h"
+#include "litert/ats/register_shape_manip.h"
 #include "litert/ats/register_slice.h"
 #include "litert/ats/register_softmax.h"
+#include "litert/ats/register_spatial.h"
 #include "litert/ats/register_transpose.h"
+#include "litert/ats/register_transpose_conv.h"
 #include "litert/ats/register_unary.h"
 
 namespace litert::testing {
@@ -49,9 +59,13 @@ void RegisterSingleOpsImpl(const AtsConf& options, size_t& test_id,
   RegisterBinaryBroadcast(options, test_id, /*iters=*/10, cap);
   RegisterComparison(options, test_id, /*iters=*/10, cap);
   RegisterUnary(options, test_id, /*iters=*/10, cap);
+  RegisterActivations(options, test_id, /*iters=*/10, cap);
+  RegisterArithmeticOps(options, test_id, /*iters=*/10, cap);
   RegisterConv2d(options, test_id, /*iters=*/10, cap);
   RegisterDepthwiseConv2d(options, test_id, /*iters=*/10, cap);
+  RegisterTransposeConv(options, test_id, /*iters=*/10, cap);
   RegisterReduction(options, test_id, /*iters=*/10, cap);
+  RegisterArgMinMax(options, test_id, /*iters=*/10, cap);
   RegisterMean(options, test_id, /*iters=*/10, cap);
   RegisterTranspose(options, test_id, /*iters=*/10, cap);
   RegisterBatchMatmul(options, test_id, /*iters=*/10, cap);
@@ -60,10 +74,16 @@ void RegisterSingleOpsImpl(const AtsConf& options, size_t& test_id,
   RegisterSoftmax(options, test_id, /*iters=*/10, cap);
   RegisterSelectV2(options, test_id, /*iters=*/10, cap);
   RegisterSlice(options, test_id, /*iters=*/10, cap);
+  RegisterIndexing(options, test_id, /*iters=*/10, cap);
+  RegisterLogicalBitwise(options, test_id, /*iters=*/10, cap);
   RegisterPooling(options, test_id, /*iters=*/10, cap);
   RegisterOneHot(options, test_id, /*iters=*/10, cap);
+  RegisterPackSplit(options, test_id, /*iters=*/10, cap);
   RegisterReshape(options, test_id, /*iters=*/10, cap);
+  RegisterShapeManip(options, test_id, /*iters=*/10, cap);
   RegisterPad(options, test_id, /*iters=*/10, cap);
+  RegisterQuantizeCast(options, test_id, /*iters=*/10, cap);
+  RegisterSpatial(options, test_id, /*iters=*/10, cap);
 }
 
 }  // namespace

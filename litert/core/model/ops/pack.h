@@ -25,6 +25,7 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/litert_common.h"
 #include "litert/core/model/model.h"
+#include "litert/core/model/ops/op_shape_inference_utils.h"
 #include "litert/core/model/shape_inference_types.h"
 
 namespace litert::internal {
@@ -125,6 +126,29 @@ inline LiteRtStatus InferPack(const LiteRtOpT& op,
   auto status = InferPack(ctx, result);
   output_shapes = std::move(result.output_shapes);
   return status;
+}
+
+template <typename T>
+inline void ReferencePack(absl::Span<const T* const> inputs,
+                          const int32_t* input_dims, int input_rank,
+                          int32_t axis, T* output_data) {
+  if (input_rank < 0) return;
+  const auto dims_span = input_rank == 0
+                             ? absl::Span<const int32_t>{}
+                             : absl::MakeConstSpan(input_dims, input_rank);
+  size_t outer_size = 0;
+  size_t inner_size = 0;
+  if (ComputeInsertAxisLayout(dims_span, axis, outer_size, inner_size) !=
+      kLiteRtStatusOk) {
+    return;
+  }
+  const size_t num_inputs = inputs.size();
+  for (size_t o = 0; o < outer_size; ++o) {
+    for (size_t n = 0; n < num_inputs; ++n) {
+      std::memcpy(output_data + (o * num_inputs + n) * inner_size,
+                  inputs[n] + o * inner_size, inner_size * sizeof(T));
+    }
+  }
 }
 
 }  // namespace litert::internal

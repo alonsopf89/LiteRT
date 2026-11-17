@@ -17,12 +17,14 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 #include "SafeInt.hpp"  // from @SafeInt
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/litert_common.h"
 #include "litert/core/model/model.h"
+#include "litert/core/model/ops/op_shape_inference_utils.h"
 #include "litert/core/model/shape_inference_types.h"
 
 namespace litert::internal {
@@ -59,6 +61,25 @@ inline LiteRtStatus InferUnpack(const LiteRtOpT& op,
     output_shapes[i] = out_shape;
   }
   return kLiteRtStatusOk;
+}
+
+template <typename T>
+inline void ReferenceUnpack(const T* input_data, const int32_t* input_dims,
+                            int input_rank, int32_t axis,
+                            absl::Span<T* const> outputs) {
+  if (input_rank <= 0) return;
+  AxisLayout layout;
+  if (ComputeAxisLayout(absl::MakeConstSpan(input_dims, input_rank), axis,
+                        layout) != kLiteRtStatusOk) {
+    return;
+  }
+  for (size_t o = 0; o < layout.outer_size; ++o) {
+    for (size_t n = 0; n < layout.axis_size; ++n) {
+      std::memcpy(outputs[n] + o * layout.inner_size,
+                  input_data + (o * layout.axis_size + n) * layout.inner_size,
+                  layout.inner_size * sizeof(T));
+    }
+  }
 }
 
 }  // namespace litert::internal

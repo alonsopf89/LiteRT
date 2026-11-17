@@ -23,6 +23,7 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/litert_common.h"
 #include "litert/core/model/model.h"
+#include "litert/core/model/ops/op_shape_inference_utils.h"
 #include "litert/core/model/shape_inference_types.h"
 
 namespace litert::internal {
@@ -181,6 +182,31 @@ TEST(SimpleUnaryOpTest, AbsEmptyInputsFailure) {
 
   EXPECT_EQ(InferAbs(op, absl::MakeSpan(input_shapes), output_shapes),
             kLiteRtStatusErrorShapeInferenceFailed);
+}
+
+TEST(SimpleUnaryOpTest, QuantizeValueHalfwayZeroPointAndSaturation) {
+  const AffineQuantSpec q{/*scale=*/0.5f, /*zero_point=*/10};
+  // Negative halfway: -0.75 / 0.5 = -1.5 -> llround = -2 -> +10 = 8.
+  EXPECT_EQ(QuantizeValue<int8_t>(-0.75f, q), 8);
+  // Positive halfway: +0.75 / 0.5 = +1.5 -> llround = +2 -> +10 = 12.
+  EXPECT_EQ(QuantizeValue<int8_t>(0.75f, q), 12);
+  // Saturation at int8 bounds.
+  EXPECT_EQ(QuantizeValue<int8_t>(-1000.0f, q), -128);
+  EXPECT_EQ(QuantizeValue<int8_t>(1000.0f, q), 127);
+  // Double-precision requantization preserves halfway rounding too.
+  EXPECT_EQ(QuantizeValueFromDouble<int16_t>(-0.75, {0.5f, 0}), -2);
+}
+
+TEST(SimpleUnaryOpTest, ReferenceLeakyReluQuantized) {
+  // input: scale=0.5, zp=0 -> vals = {-4.0, -1.0, 0.0, 2.0}
+  // alpha = 0.25 -> {-1.0, -0.25, 0.0, 2.0}
+  // output: scale=0.5, zp=1 -> {-2+1=-1, llround(-0.5)+1=-1+1=0, 1, 5}
+  const std::vector<int8_t> in = {-8, -2, 0, 4};
+  std::vector<int8_t> out(4, 0);
+  ReferenceLeakyReluQuantized(in.data(), out.data(), in.size(), /*alpha=*/0.25f,
+                              AffineQuantSpec{0.5f, 0},
+                              AffineQuantSpec{0.5f, 1});
+  EXPECT_THAT(out, ElementsAre(-1, 0, 1, 5));
 }
 
 }  // namespace

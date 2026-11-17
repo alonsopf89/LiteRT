@@ -22,6 +22,7 @@
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/litert_common.h"
 #include "litert/core/model/model.h"
+#include "litert/core/model/ops/op_shape_inference_utils.h"
 #include "litert/core/model/shape_inference_types.h"
 #include "tflite/converter/schema/schema_generated.h"
 
@@ -230,6 +231,52 @@ TEST(SimpleBinaryOpTest, EqualInvalidInputsFailure) {
 
   EXPECT_EQ(InferEqual(op, absl::MakeSpan(input_shapes), output_shapes),
             kLiteRtStatusErrorShapeInferenceFailed);
+}
+
+TEST(SimpleBinaryOpTest, ReferencePreluFloatAndQuantized) {
+  {
+    const std::vector<float> in = {-2.0f, 3.0f, -4.0f, 1.0f};
+    const std::vector<float> alpha = {0.5f, 0.25f};
+    std::vector<float> out(4, 0.0f);
+    ReferencePrelu(in.data(), alpha.data(), out.data(), in.size(),
+                   alpha.size());
+    EXPECT_THAT(out, ElementsAre(-1.0f, 3.0f, -2.0f, 1.0f));
+  }
+  {
+    // Quantized: input {-4, 4} (scale=0.5, zp=0 -> -2.0, 2.0),
+    // alpha {2} (scale=0.25, zp=0 -> 0.5), output (scale=0.5, zp=1).
+    // y = {-1.0, 2.0} -> q = {-2 + 1 = -1, 4 + 1 = 5}.
+    const std::vector<int8_t> in = {-4, 4};
+    const std::vector<int8_t> alpha = {2};
+    std::vector<int8_t> out(2, 0);
+    ReferencePrelu(in.data(), alpha.data(), out.data(), in.size(), alpha.size(),
+                   AffineQuantSpec{0.5f, 0}, AffineQuantSpec{0.25f, 0},
+                   AffineQuantSpec{0.5f, 1});
+    EXPECT_THAT(out, ElementsAre(-1, 5));
+  }
+}
+
+TEST(SimpleBinaryOpTest, ReferenceAddNFloatAndQuantized) {
+  {
+    const std::vector<float> a = {1.0f, -2.0f};
+    const std::vector<float> b = {0.5f, 3.0f};
+    const std::vector<float> c = {-0.5f, -1.0f};
+    const float* ptrs[] = {a.data(), b.data(), c.data()};
+    std::vector<float> out(2, 0.0f);
+    ReferenceAddN<float>(ptrs, out.data(), out.size());
+    EXPECT_THAT(out, ElementsAre(1.0f, 0.0f));
+  }
+  {
+    const std::vector<int8_t> a = {-2, 4};
+    const std::vector<int8_t> b = {-2, 2};
+    const int8_t* ptrs[] = {a.data(), b.data()};
+    std::vector<int8_t> out(2, 0);
+    // input scale=0.5, zp=0 -> (-1 + -1 = -2.0), (2 + 1 = 3.0)
+    // output scale=1.0, zp=0 -> (-2, 3)
+    ReferenceAddN<int8_t>(ptrs, out.data(), out.size(),
+                          AffineQuantSpec{0.5f, 0}, AffineQuantSpec{1.0f, 0});
+    EXPECT_THAT(out, ElementsAre(-2, 3));
+  }
 }
 
 }  // namespace

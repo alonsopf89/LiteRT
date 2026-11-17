@@ -21,7 +21,9 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <random>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -42,6 +44,12 @@
 #include "litert/test/generators/common.h"
 #include "litert/test/generators/graph_helpers.h"
 #include "litert/test/simple_buffer.h"
+#include "tensor/arithmetic.h"
+#include "tensor/backends/tflite/arithmetic_tflite.h"
+#include "tensor/buffer.h"
+#include "tensor/datatypes.h"
+#include "tensor/tensor.h"
+#include "tflite/schema/schema_generated.h"
 
 namespace litert {
 namespace testing {
@@ -219,6 +227,205 @@ class Pad : public TestGraph {
                       std::string(kOutputNames[0])};
 
     return SingleOpModel<kLiteRtOpCodeTflPad>(op_inputs, op_outputs);
+  }
+
+  Params params_;
+};
+
+template <typename Rank, typename T>
+class Padv2 : public TestGraph {
+ public:
+  struct Params {
+    std::array<Layout::Dim, Rank::value> input_shape;
+    std::array<int32_t, Rank::value * 2> paddings;
+    T constant_value = static_cast<T>(0);
+  };
+
+  using Traits = TestLogicTraits<TypeList<T>, TypeList<T>, Params>;
+  using Ptr = std::unique_ptr<Padv2>;
+
+  static constexpr absl::string_view Name() { return "Padv2"; }
+
+  template <typename Rng>
+  static Expected<Ptr> Create(Rng& rng) {
+    Params p;
+    std::uniform_int_distribution<int> dim_dist(2, 5);
+    std::uniform_int_distribution<int> pad_dist(0, 2);
+    for (size_t d = 0; d < kRank; ++d) {
+      p.input_shape[d] = dim_dist(rng);
+      p.paddings[2 * d] = pad_dist(rng);
+      p.paddings[2 * d + 1] = pad_dist(rng);
+    }
+    if constexpr (std::is_floating_point_v<T>) {
+      p.constant_value = static_cast<T>(1.5f);
+    } else {
+      p.constant_value = static_cast<T>(3);
+    }
+    return Create(std::move(p));
+  }
+
+  static Expected<Ptr> Create(Params params) {
+    LITERT_ASSIGN_OR_RETURN(auto model, BuildGraph(params));
+    return std::make_unique<Padv2>(std::move(params), std::move(model));
+  }
+
+  Padv2(Params params, LiteRtModelT::Ptr model)
+      : TestGraph(std::move(model)), params_(std::move(params)) {}
+
+  bool HasReference() const override { return true; }
+
+  ConformanceSpec GetConformanceSpec() const override { return ExactSpec(); }
+
+  Expected<VarBuffers> MakeInputs(
+      DefaultDevice& device,
+      const RandomTensorDataBuilder& data_builder) const override {
+    return MakeSingleRandomInput<T>(params_.input_shape, device, data_builder);
+  }
+
+  Expected<void> Reference(const VarBuffers& inputs,
+                           VarBuffers& outputs) const override {
+    LITERT_ASSIGN_OR_RETURN(auto ref_in, Traits::MakeReferenceInputs(inputs));
+    LITERT_ASSIGN_OR_RETURN(auto ref_out,
+                            Traits::MakeReferenceOutputs(outputs));
+    auto [input] = ref_in;
+    auto [output] = ref_out;
+    std::array<int32_t, kRank> dims;
+    for (size_t d = 0; d < kRank; ++d) dims[d] = params_.input_shape[d];
+    litert::internal::ReferencePadv2(
+        input.data.data(), dims.data(), static_cast<int>(kRank),
+        params_.paddings.data(), params_.constant_value, output.data.data());
+    return {};
+  }
+
+ private:
+  static constexpr size_t kRank = Rank::value;
+  static constexpr AffineQuantSpec kQuantSpec{0.02f, 0};
+
+  static Expected<LiteRtModelT::Ptr> BuildGraph(const Params& params) {
+    using TensorTf = litert::tensor::Tensor<litert::tensor::TfLiteMixinTag>;
+    std::vector<int32_t> in_dims(params.input_shape.begin(),
+                                 params.input_shape.end());
+    std::vector<int32_t> pad_data(params.paddings.begin(),
+                                  params.paddings.end());
+    TensorTf input = litert::tensor::Create(
+        "input", litert::tensor::ApiType<T>::value, in_dims);
+    MaybeSetQuant<T>(input, kQuantSpec);
+    TensorTf paddings(
+        {.type = litert::tensor::Type::kI32,
+         .shape = {static_cast<int>(kRank), 2},
+         .buffer =
+             litert::tensor::OwningCpuBuffer::Copy<litert::tensor::Type::kI32>(
+                 pad_data)});
+    paddings.SetName("paddings");
+    TensorTf const_val(
+        {.type = litert::tensor::ApiType<T>::value,
+         .shape = {},
+         .buffer = litert::tensor::OwningCpuBuffer::Copy<
+             litert::tensor::ApiType<T>::value>({params.constant_value})});
+    MaybeSetQuant<T>(const_val, kQuantSpec);
+    const_val.SetName("constant_values");
+    TensorTf output = litert::tensor::PadV2(input, paddings, const_val);
+    MaybeSetQuant<T>(output, kQuantSpec);
+    output.SetName("output");
+    return SaveTensorGraph({input}, {output});
+  }
+
+  Params params_;
+};
+
+template <typename Rank, typename T, typename ModeC>
+class MirrorPad : public TestGraph {
+ public:
+  struct Params {
+    std::array<Layout::Dim, Rank::value> input_shape;
+    std::array<int32_t, Rank::value * 2> paddings;
+  };
+
+  using Traits = TestLogicTraits<TypeList<T>, TypeList<T>, Params>;
+  using Ptr = std::unique_ptr<MirrorPad>;
+
+  static constexpr absl::string_view Name() { return "MirrorPad"; }
+
+  template <typename Rng>
+  static Expected<Ptr> Create(Rng& rng) {
+    Params p;
+    std::uniform_int_distribution<int> dim_dist(2, 5);
+    for (size_t d = 0; d < kRank; ++d) {
+      const int n = dim_dist(rng);
+      p.input_shape[d] = n;
+      const int max_pad = kSymmetric ? n : (n - 1);
+      std::uniform_int_distribution<int> pad_dist(0, max_pad);
+      p.paddings[2 * d] = pad_dist(rng);
+      p.paddings[2 * d + 1] = pad_dist(rng);
+    }
+    return Create(std::move(p));
+  }
+
+  static Expected<Ptr> Create(Params params) {
+    LITERT_ASSIGN_OR_RETURN(auto model, BuildGraph(params));
+    return std::make_unique<MirrorPad>(std::move(params), std::move(model));
+  }
+
+  MirrorPad(Params params, LiteRtModelT::Ptr model)
+      : TestGraph(std::move(model)), params_(std::move(params)) {}
+
+  bool HasReference() const override { return true; }
+
+  ConformanceSpec GetConformanceSpec() const override { return ExactSpec(); }
+
+  Expected<VarBuffers> MakeInputs(
+      DefaultDevice& device,
+      const RandomTensorDataBuilder& data_builder) const override {
+    return MakeSingleRandomInput<T>(params_.input_shape, device, data_builder);
+  }
+
+  Expected<void> Reference(const VarBuffers& inputs,
+                           VarBuffers& outputs) const override {
+    LITERT_ASSIGN_OR_RETURN(auto ref_in, Traits::MakeReferenceInputs(inputs));
+    LITERT_ASSIGN_OR_RETURN(auto ref_out,
+                            Traits::MakeReferenceOutputs(outputs));
+    auto [input] = ref_in;
+    auto [output] = ref_out;
+    std::array<int32_t, kRank> dims;
+    for (size_t d = 0; d < kRank; ++d) dims[d] = params_.input_shape[d];
+    litert::internal::ReferenceMirrorPad(
+        input.data.data(), dims.data(), static_cast<int>(kRank),
+        params_.paddings.data(), kSymmetric, output.data.data());
+    return {};
+  }
+
+ private:
+  static constexpr size_t kRank = Rank::value;
+  static constexpr tflite::MirrorPadMode kMode = ModeC::value;
+  static constexpr bool kSymmetric = (kMode == tflite::MirrorPadMode_SYMMETRIC);
+  static constexpr ElementType kElementType = GetElementType<T>();
+  static constexpr AffineQuantSpec kQuantSpec{0.02f, 0};
+
+  static Expected<LiteRtModelT::Ptr> BuildGraph(const Params& params) {
+    std::vector<int32_t> in_dims(params.input_shape.begin(),
+                                 params.input_shape.end());
+    std::vector<int32_t> pad_data(params.paddings.begin(),
+                                  params.paddings.end());
+    std::vector<int32_t> out_dims(kRank);
+    for (size_t d = 0; d < kRank; ++d) {
+      out_dims[d] = in_dims[d] + pad_data[2 * d] + pad_data[2 * d + 1];
+    }
+    std::vector<TensorDetails> op_inputs(2);
+    op_inputs[0] =
+        TensorDetails{in_dims, LiteRtElementType(kElementType), "input"};
+    op_inputs[1] = TensorDetails{{static_cast<int32_t>(kRank), 2},
+                                 kLiteRtElementTypeInt32,
+                                 "paddings",
+                                 MakeOwningBufferRef(pad_data)};
+    std::vector<TensorDetails> op_outputs(1);
+    op_outputs[0] =
+        TensorDetails{out_dims, LiteRtElementType(kElementType), "output"};
+    MaybeSetTensorDetailsQuant<T>(op_inputs[0], kQuantSpec);
+    MaybeSetTensorDetailsQuant<T>(op_outputs[0], kQuantSpec);
+    tflite::MirrorPadOptionsT opts;
+    opts.mode = kMode;
+    return SingleOpModelWithOptions<kLiteRtOpCodeTflMirrorPad>(
+        op_inputs, op_outputs, std::move(opts));
   }
 
   Params params_;

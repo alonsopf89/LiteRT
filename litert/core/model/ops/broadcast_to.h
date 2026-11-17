@@ -26,6 +26,7 @@
 #include "litert/c/litert_common.h"
 #include "litert/c/litert_model_types.h"
 #include "litert/core/model/model.h"
+#include "litert/core/model/ops/op_shape_inference_utils.h"
 #include "litert/core/model/shape_inference_types.h"
 
 namespace litert::internal {
@@ -105,6 +106,53 @@ inline LiteRtStatus InferBroadcastTo(const LiteRtOpT& op,
   }
 
   return kLiteRtStatusErrorShapeInferenceFailed;
+}
+
+template <typename T>
+inline LiteRtStatus ReferenceBroadcastTo(const T* input_data,
+                                         const int32_t* input_dims,
+                                         int input_rank,
+                                         const int32_t* output_dims,
+                                         int output_rank, T* output_data) {
+  if (input_rank < 0 || output_rank < 0) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+  const auto in_span = input_rank == 0
+                           ? absl::Span<const int32_t>{}
+                           : absl::MakeConstSpan(input_dims, input_rank);
+  const auto out_span = output_rank == 0
+                            ? absl::Span<const int32_t>{}
+                            : absl::MakeConstSpan(output_dims, output_rank);
+  std::vector<size_t> in_strides;
+  size_t total_out = 0;
+  if (LiteRtStatus status = ComputeBroadcastStridesChecked(
+          in_span, out_span, in_strides, total_out);
+      status != kLiteRtStatusOk) {
+    return status;
+  }
+  if (total_out > std::numeric_limits<size_t>::max() / sizeof(T)) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+  if (total_out == 0) {
+    return kLiteRtStatusOk;
+  }
+  if (output_rank == 0) {
+    output_data[0] = input_data[0];
+    return kLiteRtStatusOk;
+  }
+  std::vector<int32_t> pos(output_rank, 0);
+  for (size_t out_idx = 0; out_idx < total_out; ++out_idx) {
+    size_t in_idx = 0;
+    for (int d = 0; d < output_rank; ++d) {
+      in_idx += static_cast<size_t>(pos[d]) * in_strides[d];
+    }
+    output_data[out_idx] = input_data[in_idx];
+    for (int d = output_rank - 1; d >= 0; --d) {
+      if (++pos[d] < output_dims[d]) break;
+      pos[d] = 0;
+    }
+  }
+  return kLiteRtStatusOk;
 }
 
 }  // namespace litert::internal

@@ -50,6 +50,16 @@
 #include "litert/test/generators/moe_experts.h"  // IWYU pragma: export
 #include "litert/test/generators/tfl_moe.h"  // IWYU pragma: export
 #include "litert/test/generators/runtime_bmm.h"  // IWYU pragma: export
+#include "litert/test/generators/activations.h"  // IWYU pragma: export
+#include "litert/test/generators/arg_min_max.h"  // IWYU pragma: export
+#include "litert/test/generators/arithmetic_ops.h"  // IWYU pragma: export
+#include "litert/test/generators/indexing.h"  // IWYU pragma: export
+#include "litert/test/generators/logical_bitwise.h"  // IWYU pragma: export
+#include "litert/test/generators/pack_split.h"  // IWYU pragma: export
+#include "litert/test/generators/quantize_cast.h"  // IWYU pragma: export
+#include "litert/test/generators/shape_manip.h"  // IWYU pragma: export
+#include "litert/test/generators/spatial_ops.h"  // IWYU pragma: export
+#include "litert/test/generators/transpose_conv.h"  // IWYU pragma: export
 // clang-format on
 
 #endif  // THIRD_PARTY_ODML_LITERT_LITERT_TEST_GENERATORS_GENERATORS_H_

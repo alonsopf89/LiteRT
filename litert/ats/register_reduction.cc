@@ -42,6 +42,24 @@ void RegisterReductionImpl(const AtsConf& options, size_t& test_id,
                   kLiteRtOpCodeTflReduceProd, kLiteRtOpCodeTflSum>,
       TypeList<std::true_type, std::false_type>>
     (iters, test_id, options, cap);
+  RegisterCombinations<
+      Fixture,
+      Reduction,
+      SizeListC<1>,
+      TypeList<bool>,
+      OpCodeListC<kLiteRtOpCodeTflReduceAll, kLiteRtOpCodeTflReduceAny>,
+      TypeList<std::true_type>,
+      TypeList<std::false_type>>
+    (iters, test_id, options, cap);
+  RegisterCombinations<
+      Fixture,
+      Reduction,
+      SizeListC<2, 3, 4>,
+      TypeList<bool>,
+      OpCodeListC<kLiteRtOpCodeTflReduceAll, kLiteRtOpCodeTflReduceAny>,
+      TypeList<std::true_type, std::false_type>,
+      TypeList<std::false_type>>
+    (iters, test_id, options, cap);
   // clang-format on
 }
 

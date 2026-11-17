@@ -483,6 +483,8 @@ cc_library(
     name = "op_shape_inference_utils",
     hdrs = ["ops/op_shape_inference_utils.h"],
     deps = [
+        "//litert/c:litert_common",
+        "//litert/core/util:tensor_type_util",
         "//tflite/schema:schema_fbs",
         "@SafeInt",
         "@com_google_absl//absl/types:span",
@@ -507,6 +509,7 @@ cc_library(
     hdrs = ["ops/simple_binary.h"],
     deps = [
         ":model",
+        ":op_shape_inference_utils",
         ":shape_inference_types",
         "//litert/c:litert_common",
         "//litert/c/internal:litert_logging",
@@ -521,6 +524,7 @@ cc_library(
     hdrs = ["ops/simple_unary.h"],
     deps = [
         ":model",
+        ":op_shape_inference_utils",
         ":shape_inference_types",
         "//litert/c:litert_common",
         "//litert/c/internal:litert_logging",
@@ -533,6 +537,7 @@ cc_library(
     hdrs = ["ops/broadcast_to.h"],
     deps = [
         ":model",
+        ":op_shape_inference_utils",
         ":shape_inference_types",
         "//litert/c:litert_common",
         "//litert/c/internal:litert_logging",
@@ -560,6 +565,7 @@ cc_library(
     deps = [
         ":model",
         ":op_shape_inference_utils",
+        ":ops_simple_binary",
         ":shape_inference_types",
         "//litert/c:litert_common",
         "//litert/c/internal:litert_logging",
@@ -587,6 +593,7 @@ cc_library(
     hdrs = ["ops/pack.h"],
     deps = [
         ":model",
+        ":op_shape_inference_utils",
         ":shape_inference_types",
         "//litert/c:litert_common",
         "@SafeInt",
@@ -714,6 +721,7 @@ cc_library(
     hdrs = ["ops/split.h"],
     deps = [
         ":model",
+        ":op_shape_inference_utils",
         ":shape_inference_types",
         "//litert/c:litert_common",
         "@SafeInt",
@@ -739,6 +747,7 @@ cc_library(
     hdrs = ["ops/unpack.h"],
     deps = [
         ":model",
+        ":op_shape_inference_utils",
         ":shape_inference_types",
         "//litert/c:litert_common",
         "@SafeInt",
@@ -1154,6 +1163,7 @@ cc_test(
     srcs = ["ops/convolution_test.cc"],
     deps = [
         ":model",
+        ":op_shape_inference_utils",
         ":ops_convolution",
         ":shape_inference_types",
         "//litert/c:litert_common",
@@ -1200,6 +1210,7 @@ cc_test(
     srcs = ["ops/broadcast_to_test.cc"],
     deps = [
         ":model",
+        ":op_shape_inference_utils",
         ":ops_broadcast_to",
         ":shape_inference_types",
         "//litert/c:litert_common",
@@ -1214,6 +1225,7 @@ cc_test(
     srcs = ["ops/simple_binary_test.cc"],
     deps = [
         ":model",
+        ":op_shape_inference_utils",
         ":ops_simple_binary",
         ":shape_inference_types",
         "//litert/c:litert_common",
@@ -1228,6 +1240,7 @@ cc_test(
     srcs = ["ops/simple_unary_test.cc"],
     deps = [
         ":model",
+        ":op_shape_inference_utils",
         ":ops_simple_unary",
         ":shape_inference_types",
         "//litert/c:litert_common",

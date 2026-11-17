@@ -837,5 +837,88 @@ TEST(SpatialOpTest, ResizeOpRejectsMissingSizeTensorOrNonPositiveSize) {
             kLiteRtStatusErrorShapeInferenceFailed);
 }
 
+TEST(SpatialOpTest, ReferenceResizeBilinearSignedIdentityAndNegativeConstant) {
+  // Exact identity resize on signed negative values must preserve values.
+  const std::vector<int8_t> in_i8 = {-10, -20, -30, -40};
+  std::vector<int8_t> out_i8(4, 0);
+  ReferenceResizeBilinear(in_i8.data(), /*batch=*/1, /*in_h=*/2, /*in_w=*/2,
+                          /*channels=*/1, /*out_h=*/2, /*out_w=*/2,
+                          /*align_corners=*/false,
+                          /*half_pixel_centers=*/false, out_i8.data());
+  EXPECT_THAT(out_i8, ElementsAre(-10, -20, -30, -40));
+
+  const std::vector<int16_t> in_i16 = {-10, -20, -30, -40};
+  std::vector<int16_t> out_i16(4, 0);
+  ReferenceResizeBilinear(in_i16.data(), /*batch=*/1, /*in_h=*/2, /*in_w=*/2,
+                          /*channels=*/1, /*out_h=*/2, /*out_w=*/2,
+                          /*align_corners=*/false,
+                          /*half_pixel_centers=*/false, out_i16.data());
+  EXPECT_THAT(out_i16, ElementsAre(-10, -20, -30, -40));
+
+  // Constant negative input upsampled under align_corners and
+  // half_pixel_centers must remain exact.
+  const std::vector<int8_t> neg_const_i8 = {-17, -17, -17, -17};
+  std::vector<int8_t> up_i8(9, 0);
+  ReferenceResizeBilinear(neg_const_i8.data(), 1, 2, 2, 1, 3, 3,
+                          /*align_corners=*/true,
+                          /*half_pixel_centers=*/false, up_i8.data());
+  EXPECT_THAT(up_i8, ElementsAre(-17, -17, -17, -17, -17, -17, -17, -17, -17));
+
+  const std::vector<int16_t> neg_const_i16 = {-12345, -12345, -12345, -12345};
+  std::vector<int16_t> up_i16(9, 0);
+  ReferenceResizeBilinear(neg_const_i16.data(), 1, 2, 2, 1, 3, 3,
+                          /*align_corners=*/false,
+                          /*half_pixel_centers=*/true, up_i16.data());
+  EXPECT_THAT(up_i16, ElementsAre(-12345, -12345, -12345, -12345, -12345,
+                                  -12345, -12345, -12345, -12345));
+}
+
+TEST(SpatialOpTest, ReferenceResizeBilinearMixedSignAndHalfwayRounding) {
+  // 1x1x2x1 -> 1x1x3x1 with align_corners=true samples at x = 0.0, 0.5, 1.0.
+  // Round-half-away-from-zero: (-3 + -2) / 2 = -2.5 -> -3; (2 + 3) / 2 = +2.5
+  // -> +3; (-10 + 10) / 2 = 0; (-1 + 0) / 2 = -0.5 -> -1.
+  {
+    const std::vector<int8_t> in = {-3, -2};
+    std::vector<int8_t> out(3, 0);
+    ReferenceResizeBilinear(in.data(), 1, 1, 2, 1, 1, 3,
+                            /*align_corners=*/true,
+                            /*half_pixel_centers=*/false, out.data());
+    EXPECT_THAT(out, ElementsAre(-3, -3, -2));
+  }
+  {
+    const std::vector<int8_t> in = {2, 3};
+    std::vector<int8_t> out(3, 0);
+    ReferenceResizeBilinear(in.data(), 1, 1, 2, 1, 1, 3,
+                            /*align_corners=*/true,
+                            /*half_pixel_centers=*/false, out.data());
+    EXPECT_THAT(out, ElementsAre(2, 3, 3));
+  }
+  {
+    const std::vector<int8_t> in = {-10, 10};
+    std::vector<int8_t> out(3, 0);
+    ReferenceResizeBilinear(in.data(), 1, 1, 2, 1, 1, 3,
+                            /*align_corners=*/true,
+                            /*half_pixel_centers=*/false, out.data());
+    EXPECT_THAT(out, ElementsAre(-10, 0, 10));
+  }
+  {
+    const std::vector<int16_t> in = {-1, 0};
+    std::vector<int16_t> out(3, 0);
+    ReferenceResizeBilinear(in.data(), 1, 1, 2, 1, 1, 3,
+                            /*align_corners=*/true,
+                            /*half_pixel_centers=*/false, out.data());
+    EXPECT_THAT(out, ElementsAre(-1, -1, 0));
+  }
+  // Saturation at signed extrema.
+  {
+    const std::vector<int8_t> in = {-128, -128};
+    std::vector<int8_t> out(3, 0);
+    ReferenceResizeBilinear(in.data(), 1, 1, 2, 1, 1, 3,
+                            /*align_corners=*/true,
+                            /*half_pixel_centers=*/false, out.data());
+    EXPECT_THAT(out, ElementsAre(-128, -128, -128));
+  }
+}
+
 }  // namespace
 }  // namespace litert::internal

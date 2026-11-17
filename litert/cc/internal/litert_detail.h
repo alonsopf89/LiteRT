@@ -79,13 +79,33 @@ struct TypeList {
   static constexpr size_t kSize = sizeof...(Ts);
 };
 
+template <typename T, typename List>
+struct PrependTypeList;
+
+template <typename T, typename... Ts>
+struct PrependTypeList<T, TypeList<Ts...>> {
+  using Type = TypeList<T, Ts...>;
+};
+
+// Produces a `TypeList` containing `N` copies of `T`.
+template <typename T, size_t N>
+struct RepeatTypeList {
+  using Type =
+      typename PrependTypeList<T,
+                               typename RepeatTypeList<T, N - 1>::Type>::Type;
+};
+
+template <typename T>
+struct RepeatTypeList<T, 0> {
+  using Type = TypeList<>;
+};
+
 template <typename... Ts>
 struct TypeTuple {};
 
 template <template <typename...> typename C, typename... Lists, typename... Ts,
           typename... SoFar, typename Functor>
-void ExpandProductHelper(Functor& f, TypeList<Ts...>,
-                         TypeList<SoFar...> sofar);
+void ExpandProductHelper(Functor& f, TypeList<Ts...>, TypeList<SoFar...> sofar);
 
 template <template <typename...> typename C, typename Item, typename NextLists,
           typename SoFar, typename Functor>
@@ -114,7 +134,8 @@ template <template <typename...> typename C, typename... Lists, typename... Ts,
 void ExpandProductHelper(Functor& f, TypeList<Ts...>,
                          TypeList<SoFar...> sofar) {
   (ExpandProductItem<C, Ts, TypeList<Lists...>, TypeList<SoFar...>,
-                     Functor>::Run(f), ...);
+                     Functor>::Run(f),
+   ...);
 }
 
 template <template <typename...> typename C, typename HeadList,

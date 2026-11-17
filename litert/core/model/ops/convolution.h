@@ -15,6 +15,7 @@
 #ifndef ODML_LITERT_LITERT_CORE_MODEL_OPS_CONVOLUTION_H_
 #define ODML_LITERT_LITERT_CORE_MODEL_OPS_CONVOLUTION_H_
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -27,6 +28,7 @@
 #include "litert/c/litert_common.h"
 #include "litert/core/model/model.h"
 #include "litert/core/model/ops/op_shape_inference_utils.h"
+#include "litert/core/model/ops/simple_binary.h"
 #include "litert/core/model/shape_inference_types.h"
 #include "tflite/schema/schema_generated.h"
 
@@ -665,6 +667,89 @@ inline void ReferenceDepthwiseConv2D(
         }
       }
     }
+  }
+}
+
+template <typename InputT, typename FilterT, typename AccT>
+inline void AccumulateTransposeConv(const InputT* input_data,
+                                    const FilterT* filter_data, AccT* acc_data,
+                                    int batch, int in_h, int in_w, int in_c,
+                                    int out_h, int out_w, int out_c,
+                                    int filter_h, int filter_w, int stride_h,
+                                    int stride_w, int pad_t, int pad_l,
+                                    AccT input_zero_point = AccT{0}) {
+  const size_t total = static_cast<size_t>(batch) * out_h * out_w * out_c;
+  std::fill_n(acc_data, total, AccT{0});
+  for (int b = 0; b < batch; ++b) {
+    for (int ih = 0; ih < in_h; ++ih) {
+      for (int iw = 0; iw < in_w; ++iw) {
+        for (int ic = 0; ic < in_c; ++ic) {
+          const AccT in_val =
+              static_cast<AccT>(
+                  input_data[((b * in_h + ih) * in_w + iw) * in_c + ic]) -
+              input_zero_point;
+          for (int kh = 0; kh < filter_h; ++kh) {
+            const int oh = ih * stride_h + kh - pad_t;
+            if (oh < 0 || oh >= out_h) continue;
+            for (int kw = 0; kw < filter_w; ++kw) {
+              const int ow = iw * stride_w + kw - pad_l;
+              if (ow < 0 || ow >= out_w) continue;
+              for (int oc = 0; oc < out_c; ++oc) {
+                const AccT w = static_cast<AccT>(
+                    filter_data[((oc * filter_h + kh) * filter_w + kw) * in_c +
+                                ic]);
+                acc_data[((b * out_h + oh) * out_w + ow) * out_c + oc] +=
+                    in_val * w;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+inline void ReferenceTransposeConv(
+    const float* input_data, const float* filter_data, const float* bias_data,
+    float* output_data, int batch, int in_h, int in_w, int in_c, int out_h,
+    int out_w, int out_c, int filter_h, int filter_w, int stride_h,
+    int stride_w, int pad_t, int pad_l, tflite::ActivationFunctionType faf) {
+  const size_t total = static_cast<size_t>(batch) * out_h * out_w * out_c;
+  AccumulateTransposeConv<float, float, float>(
+      input_data, filter_data, output_data, batch, in_h, in_w, in_c, out_h,
+      out_w, out_c, filter_h, filter_w, stride_h, stride_w, pad_t, pad_l);
+  if (bias_data != nullptr) {
+    for (size_t i = 0; i < total; ++i) {
+      output_data[i] += bias_data[static_cast<int>(i % out_c)];
+    }
+  }
+  ApplyActivation(output_data, total, faf);
+}
+
+template <typename T, typename FilterT, typename BiasT>
+inline void ReferenceTransposeConvQuantized(
+    const T* input_data, const FilterT* filter_data, const BiasT* bias_data,
+    T* output_data, int batch, int in_h, int in_w, int in_c, int out_h,
+    int out_w, int out_c, int filter_h, int filter_w, int stride_h,
+    int stride_w, int pad_t, int pad_l, tflite::ActivationFunctionType faf,
+    const AffineQuantSpec& input_quant, float weight_scale,
+    const AffineQuantSpec& output_quant) {
+  const size_t total = static_cast<size_t>(batch) * out_h * out_w * out_c;
+  std::vector<int64_t> acc(total, 0);
+  AccumulateTransposeConv<T, FilterT, int64_t>(
+      input_data, filter_data, acc.data(), batch, in_h, in_w, in_c, out_h,
+      out_w, out_c, filter_h, filter_w, stride_h, stride_w, pad_t, pad_l,
+      input_quant.zero_point);
+  const double effective_scale = static_cast<double>(input_quant.scale) *
+                                 static_cast<double>(weight_scale);
+  for (size_t i = 0; i < total; ++i) {
+    const int oc = static_cast<int>(i % out_c);
+    const int64_t with_bias =
+        acc[i] + (bias_data != nullptr ? static_cast<int64_t>(bias_data[oc])
+                                       : int64_t{0});
+    double real_val = static_cast<double>(with_bias) * effective_scale;
+    ApplyActivation(&real_val, 1, faf);
+    output_data[i] = QuantizeValueFromDouble<T>(real_val, output_quant);
   }
 }
 

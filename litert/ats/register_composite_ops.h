@@ -29,7 +29,6 @@ void RegisterCompositeOps(const AtsConf& options, size_t& test_id,
 void RegisterCompositeOps(const AtsConf& options, size_t& test_id,
                           AtsCompileTest::Capture& cap);
 
-
 }  // namespace litert::testing
 
 #endif  // THIRD_PARTY_ODML_LITERT_LITERT_ATS_REGISTER_COMPOSITE_OPS_H_

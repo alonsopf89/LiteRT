@@ -15,6 +15,8 @@
 #include "litert/ats/register_pad.h"
 
 #include <cstddef>
+#include <cstdint>
+#include <type_traits>
 
 #include "litert/ats/compile_fixture.h"
 #include "litert/ats/configure.h"
@@ -23,10 +25,16 @@
 #include "litert/cc/internal/litert_detail.h"
 #include "litert/test/generators/common.h"
 #include "litert/test/generators/pad.h"
+#include "tflite/schema/schema_generated.h"
 #include "tflite/types/half.h"
 
 namespace litert::testing {
 namespace {
+
+using ReflectC = std::integral_constant<tflite::MirrorPadMode,
+                                        tflite::MirrorPadMode_REFLECT>;
+using SymmetricC = std::integral_constant<tflite::MirrorPadMode,
+                                          tflite::MirrorPadMode_SYMMETRIC>;
 
 template <typename Fixture>
 void RegisterPadImpl(const AtsConf& options, size_t& test_id, size_t iters,
@@ -38,6 +46,15 @@ void RegisterPadImpl(const AtsConf& options, size_t& test_id, size_t iters,
       SizeListC<1, 2, 3, 4>,
       TypeList<float, tflite::half>>
     (iters, test_id, options, cap);
+  RegisterCombinations<
+      Fixture, Padv2,
+      SizeListC<1, 2, 3, 4>,
+      TypeList<float, int8_t, int16_t>>(iters, test_id, options, cap);
+  RegisterCombinations<
+      Fixture, MirrorPad,
+      SizeListC<1, 2, 3, 4>,
+      TypeList<float, int8_t>,
+      TypeList<ReflectC, SymmetricC>>(iters, test_id, options, cap);
   // clang-format on
 }
 

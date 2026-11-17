@@ -128,6 +128,30 @@ XNNPACK_DONT_REGISTER = [
     "FullyConnected.*,2d_f32<[^>]+>(?!_cst)",
     "FullyConnected.*,1d_f32<[^>]+>(?!_cst)",
     "Transpose.*([(][78]d|[(][1-8]d_(i1|i4|i16|u16|i32|u32|i64|u64)<)",  # XNNPACK Transpose supports FP32, FP16, INT8, and UINT8 types up to rank 6
+    "tfl\\.add_n",  # XNNPACK does not support AddN
+    "tfl\\.batch_to_space_nd",  # XNNPACK does not support BatchToSpaceNd
+    "tfl\\.broadcast_to",  # XNNPACK does not support BroadcastTo
+    "tfl\\.cast.*_i1",  # XNNPACK Cast does not support bool (i1)
+    "tfl\\.expand_dims",  # XNNPACK does not support ExpandDims
+    "tfl\\.gather([{]|_nd)",  # XNNPACK does not support Gather / GatherNd
+    "tfl\\.leaky_relu.*_i16",  # XNNPACK LeakyRelu supports FP32 and INT8, not INT16
+    "tfl\\.logical_",  # XNNPACK does not support LogicalAnd / LogicalOr / LogicalNot
+    "tfl\\.mirror_pad",  # XNNPACK does not support MirrorPad
+    "tfl\\.pack[{]",  # XNNPACK does not support Pack
+    "tfl\\.pad_v2",  # XNNPACK does not support Padv2
+    "tfl\\.quantize.*_i16",  # XNNPACK Quantize does not support INT16
+    "tfl\\.reduce_(all|any)",  # XNNPACK does not support ReduceAll / ReduceAny
+    "tfl\\.resize_bilinear.*_i16",  # XNNPACK ResizeBilinear does not support INT16
+    "tfl\\.resize_nearest_neighbor",  # XNNPACK does not support ResizeNearestNeighbor
+    "tfl\\.reverse_v2",  # XNNPACK does not support ReverseV2
+    "tfl\\.right_shift",  # XNNPACK does not support RightShift
+    "tfl\\.space_to_batch_nd",  # XNNPACK does not support SpaceToBatchNd
+    "tfl\\.split[{].*_i16",  # XNNPACK Split does not support INT16
+    "tfl\\.split_v",  # XNNPACK does not support SplitV
+    "tfl\\.squeeze",  # XNNPACK does not support Squeeze
+    "tfl\\.strided_slice",  # XNNPACK does not support non-trivial StridedSlice
+    "tfl\\.tile",  # XNNPACK does not support Tile
+    "tfl\\.unpack",  # XNNPACK does not support Unpack
 ]
 
 YNNPACK_MODELS_DONT_REGISTER = [
@@ -194,6 +218,33 @@ YNNPACK_DONT_REGISTER = [
     "TflMoe",  # YNNPACK does not support ML Drift GPU custom "moe" op
     "FullyConnected.*(i4|u8)",  # YNNPACK delegate requires even output dims for INT4 weights and does not support UINT8 FullyConnected
     "Transpose.*[(][1-8]d_(i1|i16|u16|u32|i64|u64)<",  # YNNPACK Transpose supports FP32, FP16, INT4, INT8, UINT8, and INT32 types
+    "tfl\\.add_n",  # YNNPACK does not support AddN
+    "tfl\\.arg_(min|max)",  # YNNPACK does not support ArgMin / ArgMax
+    "tfl\\.batch_to_space_nd",  # YNNPACK does not support BatchToSpaceNd
+    "tfl\\.bitwise_xor",  # YNNPACK does not support BitwiseXor
+    "tfl\\.broadcast_to",  # YNNPACK does not support BroadcastTo
+    "tfl\\.cast.*(_i1|[(][^)]*_f32[^)]*[)]->[(][^)]*_i32|[(][^)]*_i32[^)]*[)]->[(][^)]*_i8)",  # YNNPACK Cast does not support bool, f32->i32, or i32->i8
+    "tfl\\.expand_dims.*_i16",  # YNNPACK ExpandDims does not support INT16
+    "tfl\\.floor_mod",  # YNNPACK does not support FloorMod
+    "tfl\\.leaky_relu.*_i16",  # YNNPACK LeakyRelu does not support INT16
+    "tfl\\.logical_",  # YNNPACK does not support LogicalAnd / LogicalOr / LogicalNot
+    "tfl\\.mirror_pad",  # YNNPACK does not support MirrorPad
+    "tfl\\.pack[{]",  # YNNPACK does not support Pack
+    "tfl\\.pad_v2.*_i16",  # YNNPACK Padv2 does not support INT16
+    "tfl\\.prelu.*_i16",  # YNNPACK PRelu does not support INT16
+    "tfl\\.quantize.*(_i16|[(][^)]*_i8[^)]*[)]->[(][^)]*_i8)",  # YNNPACK Quantize only supports f32->i8
+    "tfl\\.reduce_(all|any)",  # YNNPACK does not support ReduceAll / ReduceAny
+    "tfl\\.resize_bilinear",  # YNNPACK does not support ResizeBilinear
+    "tfl\\.resize_nearest_neighbor",  # YNNPACK does not support ResizeNearestNeighbor
+    "tfl\\.reverse_v2",  # YNNPACK does not support ReverseV2
+    "tfl\\.right_shift",  # YNNPACK does not support RightShift
+    "tfl\\.space_to_batch_nd",  # YNNPACK does not support SpaceToBatchNd
+    "tfl\\.split[{].*_i16",  # YNNPACK Split does not support INT16
+    "tfl\\.split_v",  # YNNPACK does not support SplitV
+    "tfl\\.squeeze",  # YNNPACK does not support Squeeze
+    "tfl\\.strided_slice.*(_i16|shrink_axis_mask=1)",  # YNNPACK StridedSlice does not support INT16 or shrink_axis_mask=1
+    "tfl\\.transpose_conv",  # YNNPACK does not support TransposeConv
+    "tfl\\.unpack",  # YNNPACK does not support Unpack
 ]
 
 BUILTIN_MODELS_DONT_REGISTER = [
@@ -297,6 +348,9 @@ BUILTIN_DONT_REGISTER = [
     "_f16",  # TFLite built-in kernels do not support FLOAT16 tensors
     "wf=SHUFFLED4x16INT8",  # Built-in FC needs a 2nd workspace output for this format
     "TflMoe",  # TFLite built-in CPU kernels do not support ML Drift GPU custom "moe" op
+    "tfl\\.add_n.*_i8",  # TFLite built-in AddN only supports FLOAT32 and INT32
+    "tfl\\.arg_min.*_i16",  # TFLite built-in ArgMin does not support INT16
+    "tfl\\.prelu.*_i16",  # TFLite built-in PRelu INT16 kernel expects INT8 alpha (16x8)
 ]
 
 BUILTIN_EXTRA_FLAGS = [
@@ -479,6 +533,16 @@ QUALCOMM_DONT_REGISTER = [
     "FullyConnected.*u8",  # Qualcomm QNN does not support quantized UINT8 GEMM
     "FullyConnected.*,2d_f32[^c]",  # Qualcomm QNN does not support dynamic weights for FP32 FC
     "FullyConnected.*_cst.*,1d_f32[^c]",  # Qualcomm QNN does not support dynamic bias for FP32 FC
+    "BitwiseXor",  # Qualcomm QNN does not support BitwiseXor
+    "RightShift",  # Qualcomm QNN does not support RightShift
+    "tfl[.]add_n.*_i8<",  # Qualcomm QNN does not support quantized INT8 AddN
+    "tfl[.]arg_min.*[(][1-8]d_(i16|i32)<",  # Qualcomm QNN ArgMin does not support INT16 or INT32 inputs
+    "tfl[.]cast.*_i8<",  # Qualcomm QNN Cast does not support INT8 conversions
+    "tfl[.]floor_div.*[(][1-8]d_i32<",  # Qualcomm QNN does not support INT32 FloorDiv
+    "tfl[.]pack.*_i16<",  # Qualcomm QNN Pack does not support INT16
+    "tfl[.]pad_v2.*_i16<",  # Qualcomm QNN Padv2 does not support INT16
+    "tfl[.]squeeze.*_i16<",  # Qualcomm QNN Squeeze does not support INT16
+    "tfl[.]tile.*_i16<",  # Qualcomm QNN Tile does not support INT16
 ]
 
 QUALCOMM_RUN_DONT_REGISTER = [
@@ -486,6 +550,25 @@ QUALCOMM_RUN_DONT_REGISTER = [
     "Comparison.*f32",  # Qualcomm QNN executes f32 comparisons in FP16 precision, rounding close f32 inputs under kExact
     "SelectV2.*f32",  # Qualcomm QNN executes f32 SelectV2 in FP16 precision, failing kExact byte comparison
     "Slice.*f32",  # Qualcomm QNN executes f32 Slice in FP16 precision, failing kExact byte comparison
+    "tfl[.]gather.*f32",  # Qualcomm QNN executes f32 Gather in FP16 precision, failing kExact byte comparison
+    "tfl[.]pack.*f32",  # Qualcomm QNN executes f32 Pack in FP16 precision, failing kExact byte comparison
+    "tfl[.]unpack.*f32",  # Qualcomm QNN executes f32 Unpack in FP16 precision, failing kExact byte comparison
+    "tfl[.]split(_v)?[{].*f32",  # Qualcomm QNN executes f32 Split/SplitV in FP16 precision, failing kExact byte comparison
+    "tfl[.]expand_dims.*f32",  # Qualcomm QNN executes f32 ExpandDims in FP16 precision, failing kExact byte comparison
+    "tfl[.]squeeze.*f32",  # Qualcomm QNN executes f32 Squeeze in FP16 precision, failing kExact byte comparison
+    "tfl[.]tile.*f32",  # Qualcomm QNN executes f32 Tile in FP16 precision, failing kExact byte comparison
+    "tfl[.]reverse_v2.*f32",  # Qualcomm QNN executes f32 ReverseV2 in FP16 precision, failing kExact byte comparison
+    "tfl[.]broadcast_to.*f32",  # Qualcomm QNN executes f32 BroadcastTo in FP16 precision, failing kExact byte comparison
+    "tfl[.]pad_v2.*f32",  # Qualcomm QNN executes f32 Padv2 in FP16 precision, failing kExact byte comparison
+    "tfl[.]mirror_pad.*f32",  # Qualcomm QNN executes f32 MirrorPad in FP16 precision, failing kExact byte comparison
+    "tfl[.]resize_nearest_neighbor.*f32",  # Qualcomm QNN executes f32 ResizeNearestNeighbor in FP16 precision, failing kExact byte comparison
+    "tfl[.]space_to_depth.*f32",  # Qualcomm QNN executes f32 SpaceToDepth in FP16 precision, failing kExact byte comparison
+    "tfl[.]depth_to_space.*f32",  # Qualcomm QNN executes f32 DepthToSpace in FP16 precision, failing kExact byte comparison
+    "tfl[.]space_to_batch_nd.*f32",  # Qualcomm QNN executes f32 SpaceToBatchNd in FP16 precision, failing kExact byte comparison
+    "tfl[.]batch_to_space_nd.*f32",  # Qualcomm QNN executes f32 BatchToSpaceNd in FP16 precision, failing kExact byte comparison
+    "tfl[.]prelu.*_i16<",  # Qualcomm QNN Prelu exhibits quantized bucket mismatches on INT16 inputs
+    "tfl[.]pad_v2.*_i8<",  # Qualcomm QNN Padv2 corrupts padded bytes on quantized INT8 tensors
+    "tfl[.]cast.*[(][1-8]d_i32<[^>]*>[)]->[(][1-8]d_(i1|f32)<",  # Qualcomm QNN Cast miscomputes INT32->BOOL and loses precision on INT32->FP32
 ]
 
 QUALCOMM_SOC_MODELS = {"sm8650": "SM8650"}
@@ -541,6 +624,9 @@ litert_define_ats(
 #     "OneHot",  # Google Tensor compiler does not support OneHot
 #     "tfl[.]prelu",  # Google Tensor compiler requires PRelu alpha to be statically allocated
 #     "tfl[.]reduce_prod",  # Google Tensor compiler does not support ReduceProd
+#     "tfl[.]add_n.*_i8<",  # Google Tensor compiler does not support quantized i8 AddN
+#     "tfl[.]mirror_pad",  # Google Tensor compiler does not support MirrorPad
+#     "tfl[.]strided_slice",  # Google Tensor compiler rejects non-unit/unsorted ATS StridedSlice configurations
 #     "Conv2d.*f16",  # Google Tensor compiler does not support FP16 Conv2d/DepthwiseConv2d
 #     "FullyConnected.*(f16|i4|u8|SHUFFLED)",  # Google Tensor compiler does not support FP16, INT4, UINT8, or SHUFFLED FullyConnected
 #     "FullyConnected.*,2d_f32<[^>]+>(?!_cst)",  # Google Tensor compiler does not support dynamic weights for FP32 FullyConnected
@@ -605,8 +691,28 @@ MEDIATEK_DONT_REGISTER = [
     "SelectV2",  # MediaTek NeuroPilot does not support SelectV2
     "LogSoftmax",  # MediaTek NeuroPilot does not support LogSoftmax
     "tfl[.]floor_div",  # MediaTek NeuroPilot does not support FloorDiv
+    "tfl[.]floor_mod",  # MediaTek NeuroPilot does not support FloorMod
     "tfl[.]pow",  # MediaTek NeuroPilot does not support Pow
     "tfl[.]prelu",  # MediaTek NeuroPilot requires static PRelu alpha
+    "tfl[.]add_n",  # MediaTek NeuroPilot does not support AddN
+    "tfl[.]leaky_relu.*_(i8|i16)<",  # MediaTek NeuroPilot LeakyRelu only compiles FP32, not quantized i8/i16
+    "tfl[.]cast",  # MediaTek NeuroPilot Cast rejects integer and bool ATS cast pairs
+    "tfl[.]gather(_nd)?[{]",  # MediaTek NeuroPilot does not support Gather or GatherNd
+    "tfl[.]strided_slice",  # MediaTek NeuroPilot rejects ATS StridedSlice configurations
+    "tfl[.]pack",  # MediaTek NeuroPilot does not support Pack
+    "tfl[.]split_v",  # MediaTek NeuroPilot does not support SplitV
+    "tfl[.]mirror_pad",  # MediaTek NeuroPilot does not support MirrorPad
+    "tfl[.]expand_dims",  # MediaTek NeuroPilot does not support ExpandDims
+    "tfl[.]squeeze",  # MediaTek NeuroPilot does not support Squeeze
+    "tfl[.]reverse_v2",  # MediaTek NeuroPilot does not support ReverseV2
+    "tfl[.]broadcast_to",  # MediaTek NeuroPilot does not support BroadcastTo
+    "tfl[.](space_to_depth|depth_to_space|space_to_batch_nd|batch_to_space_nd)",  # MediaTek NeuroPilot does not support spatial manipulation ops
+    "ArgMinMax",  # MediaTek NeuroPilot does not support ArgMax or ArgMin
+    "LogicalNot",  # MediaTek NeuroPilot does not support LogicalNot
+    "LogicalBinary",  # MediaTek NeuroPilot does not support LogicalAnd or LogicalOr
+    "tfl[.]reduce_(all|any)",  # MediaTek NeuroPilot does not support ReduceAll or ReduceAny
+    "BitwiseXor",  # MediaTek NeuroPilot does not support BitwiseXor
+    "RightShift",  # MediaTek NeuroPilot does not support RightShift
     "tfl[.]reduce_min",  # MediaTek NeuroPilot does not support ReduceMin
     "tfl[.]reduce_prod",  # MediaTek NeuroPilot does not support ReduceProd
     "tfl[.](cos|sin|ceil|elu|exp|floor|log|neg|relu6|relu_0_to_1|relu_n1_to_1|round|sign|square|zeros_like)[{]",  # Unsupported Unary ops in MediaTek plugin
@@ -828,49 +934,21 @@ litert_define_ats(
     soc_models = SAMSUNG_SOC_MODELS,
 )
 
+XNNPACK_MACOS_DONT_REGISTER = XNNPACK_DONT_REGISTER + [
+    "Conv2d.*f16",  # XNNPACK delegate at ToT does not yet support f16 Conv2d on macOS
+    "BatchMatmul.*f16",  # XNNPACK delegate at ToT does not yet support f16 BatchMatmul on macOS
+    "FullyConnected.*f16",  # XNNPACK delegate at ToT does not yet support f16 FullyConnected on macOS
+    # Explicit ExtraModel exclusions (unsupported by XNNPACK):
+    "hf_all_minilm_l6_v2",
+    "u2net_lite",
+    "whisper_tiny_decoder",
+    "yolo11n",
+]
+
 litert_define_ats(
     name = "cpu_macos_ats",
     backend = "cpu",
-    dont_register = [
-        "(_i32<[^>]+>(?!_cst)|->[(][^)]*_i32)",  # XNNPACK does not support dynamic int32 math (allows int32 static constants)
-        "Comparison",  # XNNPACK does not support Comparison ops
-        "OneHot",  # XNNPACK does not support OneHot
-        "Transformer",  # XNNPACK does not support TransformerLayer flex/custom ops
-        "GroupNorm",  # XNNPACK does not support GroupNorm composite op
-        "LayerNorm",  # XNNPACK does not support LayerNorm composite op
-        "MoeExperts",  # XNNPACK does not support MoeExperts composite op
-        "TflMoe",  # XNNPACK does not support TflMoe custom op
-        "SdpaTransposed",  # XNNPACK does not support SdpaTransposed composite op
-        "QkvNormRope",  # XNNPACK does not support QkvNormRope composite op
-        "RmsNorm",  # XNNPACK does not support RmsNorm composite op
-        "Rope",  # XNNPACK does not support Rope composite op
-        "RuntimeBmm",  # XNNPACK does not support RuntimeBmm composite op
-        "Swiglu",  # XNNPACK does not support SwiGLU op
-        "SelectV2",  # XNNPACK does not support SelectV2
-        "tfl\\.floor_div",  # XNNPACK does not support FloorDiv
-        "tfl\\.pow",  # XNNPACK does not support Pow
-        "tfl\\.prelu",  # XNNPACK requires PRelu alpha to be statically allocated
-        "tfl\\.zeros_like",  # XNNPACK does not support ZerosLike
-        "tfl\\.sign",  # XNNPACK does not support Sign
-        "tfl\\.relu_0_to_1",  # XNNPACK does not support Relu0To1
-        "tfl\\.elu",  # XNNPACK does not support Elu
-        "tfl\\.reduce_prod",  # XNNPACK does not support ReduceProd
-        "LogSoftmax",  # XNNPACK does not support LogSoftmax
-        "Pooling",  # XNNPACK rejects pooling when stride > filter size
-        "Conv2d.*f16",  # XNNPACK delegate at ToT does not yet support f16 Conv2d
-        "BatchMatmul.*f16",  # XNNPACK delegate at ToT does not yet support f16 BatchMatmul
-        "FullyConnected.*(f16|[23]d_i8,2d_i8|u8|SHUFFLED)",  # XNNPACK delegate at ToT does not yet support these FullyConnected presets
-        "Sdpa.*f16",  # XNNPACK delegate does not support f16 SDPA
-        "Sdpa.*x8x[0-9]+>.*x1x[0-9]+>",  # XNNPACK delegate does not support 8-head MQA decode
-        "FullyConnected.*,2d_f32<[^>]+>(?!_cst)",
-        "FullyConnected.*,1d_f32<[^>]+>(?!_cst)",
-        "Transpose.*([(][78]d|[(][1-8]d_(i1|i4|i16|u16|i32|u32|i64|u64)<)",  # XNNPACK Transpose supports FP32, FP16, INT8, and UINT8 types up to rank 6
-        # Explicit ExtraModel exclusions (unsupported by XNNPACK):
-        "hf_all_minilm_l6_v2",
-        "u2net_lite",
-        "whisper_tiny_decoder",
-        "yolo11n",
-    ],
+    dont_register = XNNPACK_MACOS_DONT_REGISTER,
     extra_flags = [
         "--data_seed=42",
     ],
@@ -1254,6 +1332,9 @@ cc_library(
         ":compile_fixture",
         ":configure",
         ":inference_fixture",
+        ":register_activations",
+        ":register_arg_min_max",
+        ":register_arithmetic_ops",
         ":register_batch_matmul",
         ":register_binary_broadcast",
         ":register_binary_no_bcast",
@@ -1262,16 +1343,23 @@ cc_library(
         ":register_conv_2d",
         ":register_depthwise_conv_2d",
         ":register_fully_connected",
+        ":register_indexing",
+        ":register_logical_bitwise",
         ":register_mean",
         ":register_one_hot",
+        ":register_pack_split",
         ":register_pad",
         ":register_pooling",
+        ":register_quantize_cast",
         ":register_reduction",
         ":register_reshape",
         ":register_select_v2",
+        ":register_shape_manip",
         ":register_slice",
         ":register_softmax",
+        ":register_spatial",
         ":register_transpose",
+        ":register_transpose_conv",
         ":register_unary",
     ],
 )
@@ -1507,6 +1595,7 @@ cc_library(
         "//litert/cc/internal:litert_detail",
         "//litert/test/generators:common",
         "//litert/test/generators:pad",
+        "//tflite/schema:schema_fbs",
         "//tflite/types:half",
     ],
 )
@@ -1562,6 +1651,180 @@ cc_library(
         "//litert/cc/internal:litert_detail",
         "//litert/test/generators:common",
         "//litert/test/generators:reshape",
+    ],
+)
+
+cc_library(
+    name = "register_activations",
+    testonly = True,
+    srcs = ["register_activations.cc"],
+    hdrs = ["register_activations.h"],
+    copts = commandline_flag_copts(),
+    deps = [
+        ":compile_fixture",
+        ":configure",
+        ":inference_fixture",
+        ":register",
+        "//litert/cc/internal:litert_detail",
+        "//litert/test/generators:activations",
+        "//litert/test/generators:common",
+    ],
+)
+
+cc_library(
+    name = "register_arithmetic_ops",
+    testonly = True,
+    srcs = ["register_arithmetic_ops.cc"],
+    hdrs = ["register_arithmetic_ops.h"],
+    copts = commandline_flag_copts(),
+    deps = [
+        ":compile_fixture",
+        ":configure",
+        ":inference_fixture",
+        ":register",
+        "//litert/c:litert_op_code",
+        "//litert/cc/internal:litert_detail",
+        "//litert/test/generators:arithmetic_ops",
+        "//litert/test/generators:common",
+    ],
+)
+
+cc_library(
+    name = "register_arg_min_max",
+    testonly = True,
+    srcs = ["register_arg_min_max.cc"],
+    hdrs = ["register_arg_min_max.h"],
+    copts = commandline_flag_copts(),
+    deps = [
+        ":compile_fixture",
+        ":configure",
+        ":inference_fixture",
+        ":register",
+        "//litert/c:litert_op_code",
+        "//litert/cc/internal:litert_detail",
+        "//litert/test/generators:arg_min_max",
+        "//litert/test/generators:common",
+    ],
+)
+
+cc_library(
+    name = "register_indexing",
+    testonly = True,
+    srcs = ["register_indexing.cc"],
+    hdrs = ["register_indexing.h"],
+    copts = commandline_flag_copts(),
+    deps = [
+        ":compile_fixture",
+        ":configure",
+        ":inference_fixture",
+        ":register",
+        "//litert/cc/internal:litert_detail",
+        "//litert/test/generators:common",
+        "//litert/test/generators:indexing",
+    ],
+)
+
+cc_library(
+    name = "register_logical_bitwise",
+    testonly = True,
+    srcs = ["register_logical_bitwise.cc"],
+    hdrs = ["register_logical_bitwise.h"],
+    copts = commandline_flag_copts(),
+    deps = [
+        ":compile_fixture",
+        ":configure",
+        ":inference_fixture",
+        ":register",
+        "//litert/c:litert_op_code",
+        "//litert/test/generators:common",
+        "//litert/test/generators:logical_bitwise",
+    ],
+)
+
+cc_library(
+    name = "register_pack_split",
+    testonly = True,
+    srcs = ["register_pack_split.cc"],
+    hdrs = ["register_pack_split.h"],
+    copts = commandline_flag_copts(),
+    deps = [
+        ":compile_fixture",
+        ":configure",
+        ":inference_fixture",
+        ":register",
+        "//litert/cc/internal:litert_detail",
+        "//litert/test/generators:common",
+        "//litert/test/generators:pack_split",
+    ],
+)
+
+cc_library(
+    name = "register_quantize_cast",
+    testonly = True,
+    srcs = ["register_quantize_cast.cc"],
+    hdrs = ["register_quantize_cast.h"],
+    copts = commandline_flag_copts(),
+    deps = [
+        ":compile_fixture",
+        ":configure",
+        ":inference_fixture",
+        ":register",
+        "//litert/cc/internal:litert_detail",
+        "//litert/test/generators:common",
+        "//litert/test/generators:quantize_cast",
+    ],
+)
+
+cc_library(
+    name = "register_shape_manip",
+    testonly = True,
+    srcs = ["register_shape_manip.cc"],
+    hdrs = ["register_shape_manip.h"],
+    copts = commandline_flag_copts(),
+    deps = [
+        ":compile_fixture",
+        ":configure",
+        ":inference_fixture",
+        ":register",
+        "//litert/cc/internal:litert_detail",
+        "//litert/test/generators:common",
+        "//litert/test/generators:shape_manip",
+    ],
+)
+
+cc_library(
+    name = "register_spatial",
+    testonly = True,
+    srcs = ["register_spatial.cc"],
+    hdrs = ["register_spatial.h"],
+    copts = commandline_flag_copts(),
+    deps = [
+        ":compile_fixture",
+        ":configure",
+        ":inference_fixture",
+        ":register",
+        "//litert/c:litert_op_code",
+        "//litert/cc/internal:litert_detail",
+        "//litert/test/generators:common",
+        "//litert/test/generators:spatial_ops",
+    ],
+)
+
+cc_library(
+    name = "register_transpose_conv",
+    testonly = True,
+    srcs = ["register_transpose_conv.cc"],
+    hdrs = ["register_transpose_conv.h"],
+    copts = commandline_flag_copts(),
+    deps = [
+        ":compile_fixture",
+        ":configure",
+        ":inference_fixture",
+        ":register",
+        "//litert/cc/internal:litert_detail",
+        "//litert/test/generators:common",
+        "//litert/test/generators:transpose_conv",
+        "//tflite/schema:schema_fbs",
     ],
 )
 
@@ -1898,7 +2161,6 @@ cc_library(
         "//litert/c:litert_common",
         "//litert/c/internal:litert_logging",
         "//litert/c/options:litert_cpu_options",
-        "//litert/cc:litert_buffer_ref",
         "//litert/cc:litert_common",
         "//litert/cc:litert_environment",
         "//litert/cc:litert_environment_options",
@@ -1907,6 +2169,7 @@ cc_library(
         "//litert/cc:litert_options",
         "//litert/cc/internal:litert_detail",
         "//litert/cc/internal:litert_rng",
+        "//litert/cc/options:litert_arm_vulkan_ml_options",
         "//litert/cc/options:litert_gpu_options",
         "//litert/cc/options:litert_mediatek_options",
         "//litert/cc/options:litert_qualcomm_options",
@@ -1915,6 +2178,7 @@ cc_library(
         "//litert/core:filesystem_testonly",
         "//litert/core/model:model_load",
         "//litert/core/model:model_serialize",
+        "//litert/tools/flags/vendors:arm_vulkan_ml_flags",
         "//litert/tools/flags/vendors:mediatek_flags",
         "//litert/tools/flags/vendors:qualcomm_flags",
         "//litert/tools/flags/vendors:samsung_flags",

@@ -201,8 +201,8 @@ inline bool ReferenceReduction(const T* input_data, const int* input_dims,
 
   return tflite::reference_ops::ReduceGeneric<T>(
       input_data, input_dims, input_num_dims, output_data, output_dims,
-      output_num_dims, axis, num_axis, keep_dims, temp_index,
-      resolved_axis, init_value, reducer);
+      output_num_dims, axis, num_axis, keep_dims, temp_index, resolved_axis,
+      init_value, reducer);
 }
 
 inline bool ReferenceMean(const float* input_data, const int* input_dims,
@@ -224,6 +224,50 @@ inline bool ReferenceMean(const float* input_data, const int* input_dims,
       input_data, input_dims, input_num_dims, output_data, output_dims,
       output_num_dims, axis, num_axis, keep_dims, temp_index, resolved_axis,
       temp_sum.data());
+}
+
+template <typename T>
+inline bool ReferenceArgMinMax(const T* input_data, const int32_t* input_dims,
+                               int input_rank, int32_t axis, bool is_arg_max,
+                               int32_t* output_data) {
+  if (input_rank <= 0) {
+    return false;
+  }
+  if (axis < 0) {
+    axis += input_rank;
+  }
+  if (axis < 0 || axis >= input_rank) {
+    return false;
+  }
+  const int32_t axis_size = input_dims[axis];
+  if (axis_size <= 0) {
+    return false;
+  }
+  size_t outer_size = 1;
+  for (int i = 0; i < axis; ++i) {
+    outer_size *= static_cast<size_t>(input_dims[i]);
+  }
+  size_t inner_size = 1;
+  for (int i = axis + 1; i < input_rank; ++i) {
+    inner_size *= static_cast<size_t>(input_dims[i]);
+  }
+  for (size_t outer = 0; outer < outer_size; ++outer) {
+    for (size_t inner = 0; inner < inner_size; ++inner) {
+      const size_t base =
+          outer * static_cast<size_t>(axis_size) * inner_size + inner;
+      T best_val = input_data[base];
+      int32_t best_idx = 0;
+      for (int32_t i = 1; i < axis_size; ++i) {
+        const T cur = input_data[base + static_cast<size_t>(i) * inner_size];
+        if (is_arg_max ? (cur > best_val) : (cur < best_val)) {
+          best_val = cur;
+          best_idx = i;
+        }
+      }
+      output_data[outer * inner_size + inner] = best_idx;
+    }
+  }
+  return true;
 }
 
 }  // namespace litert::internal

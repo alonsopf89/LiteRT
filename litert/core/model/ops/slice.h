@@ -536,6 +536,122 @@ inline void ReferenceSlice(const T* input_data, const int32_t* input_dims,
                  out_ptr);
 }
 
+// Evaluates StridedSlice for supported mask combinations (`begin_mask`,
+// `end_mask`, `shrink_axis_mask`). Returns `kLiteRtStatusErrorUnsupported` if
+// `ellipsis_mask` or `new_axis_mask` is non-zero, and
+// `kLiteRtStatusErrorInvalidArgument` for invalid ranks, dimensions, or zero
+// strides.
+template <typename T>
+inline LiteRtStatus ReferenceStridedSlice(
+    const T* input_data, const int32_t* input_dims, int rank,
+    const int32_t* begin, const int32_t* end, const int32_t* strides,
+    int32_t begin_mask, int32_t end_mask, int32_t ellipsis_mask,
+    int32_t new_axis_mask, int32_t shrink_axis_mask, T* output_data) {
+  constexpr int kMaxMaskBits = 31;
+  if (rank < 0 || rank >= kMaxMaskBits) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+  if (ellipsis_mask != 0 || new_axis_mask != 0) {
+    return kLiteRtStatusErrorUnsupported;
+  }
+  if (rank == 0) {
+    if (input_data == nullptr || output_data == nullptr) {
+      return kLiteRtStatusErrorInvalidArgument;
+    }
+    output_data[0] = input_data[0];
+    return kLiteRtStatusOk;
+  }
+  if (input_dims == nullptr || begin == nullptr || end == nullptr ||
+      strides == nullptr) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+  std::vector<int32_t> start(rank);
+  std::vector<int32_t> stop(rank);
+  std::vector<int32_t> step(rank);
+  std::vector<int32_t> count(rank);
+  size_t total_out = 1;
+  bool empty_out = false;
+  for (int d = 0; d < rank; ++d) {
+    const int32_t dim = input_dims[d];
+    if (dim < 0 || strides[d] == 0) {
+      return kLiteRtStatusErrorInvalidArgument;
+    }
+    step[d] = strides[d];
+    const int32_t axis_bit = 1 << d;
+    if (dim == 0) {
+      if ((shrink_axis_mask & axis_bit) != 0) {
+        return kLiteRtStatusErrorInvalidArgument;
+      }
+      start[d] = 0;
+      stop[d] = 0;
+      count[d] = 0;
+      empty_out = true;
+      continue;
+    }
+    if ((shrink_axis_mask & axis_bit) != 0) {
+      int32_t idx = begin[d] < 0 ? begin[d] + dim : begin[d];
+      start[d] = std::clamp(idx, 0, dim - 1);
+      count[d] = 1;
+      continue;
+    }
+    int32_t s =
+        (begin_mask & axis_bit) != 0 ? (step[d] > 0 ? 0 : dim - 1) : begin[d];
+    if (s < 0) s += dim;
+    s = std::clamp(s, 0, step[d] > 0 ? dim : dim - 1);
+    int32_t e = (end_mask & axis_bit) != 0 ? (step[d] > 0 ? dim : -1) : end[d];
+    if ((end_mask & axis_bit) == 0 && e < 0) e += dim;
+    e = std::clamp(e, step[d] > 0 ? 0 : -1, dim);
+    start[d] = s;
+    stop[d] = e;
+    if (step[d] > 0) {
+      count[d] = s < e ? static_cast<int32_t>(
+                             (static_cast<int64_t>(e) - s - 1) / step[d] + 1)
+                       : 0;
+    } else {
+      count[d] = s > e ? static_cast<int32_t>(
+                             (static_cast<int64_t>(e) - s + 1) / step[d] + 1)
+                       : 0;
+    }
+    if (count[d] == 0) {
+      empty_out = true;
+    }
+  }
+  if (empty_out) {
+    return kLiteRtStatusOk;
+  }
+  if (input_data == nullptr || output_data == nullptr) {
+    return kLiteRtStatusErrorInvalidArgument;
+  }
+  for (int d = 0; d < rank; ++d) {
+    if (!SafeMultiply(total_out, static_cast<size_t>(count[d]), total_out)) {
+      return kLiteRtStatusErrorInvalidArgument;
+    }
+  }
+
+  std::vector<size_t> in_strides(rank, 1);
+  for (int d = rank - 2; d >= 0; --d) {
+    if (!SafeMultiply(in_strides[d + 1], static_cast<size_t>(input_dims[d + 1]),
+                      in_strides[d])) {
+      return kLiteRtStatusErrorInvalidArgument;
+    }
+  }
+  std::vector<int32_t> pos(rank, 0);
+  for (size_t out_idx = 0; out_idx < total_out; ++out_idx) {
+    size_t in_idx = 0;
+    for (int d = 0; d < rank; ++d) {
+      const int64_t coord = static_cast<int64_t>(start[d]) +
+                            static_cast<int64_t>(pos[d]) * step[d];
+      in_idx += static_cast<size_t>(coord) * in_strides[d];
+    }
+    output_data[out_idx] = input_data[in_idx];
+    for (int d = rank - 1; d >= 0; --d) {
+      if (++pos[d] < count[d]) break;
+      pos[d] = 0;
+    }
+  }
+  return kLiteRtStatusOk;
+}
+
 }  // namespace litert::internal
 
 #endif  // ODML_LITERT_LITERT_CORE_MODEL_OPS_SLICE_H_

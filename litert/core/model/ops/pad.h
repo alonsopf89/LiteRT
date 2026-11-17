@@ -103,6 +103,90 @@ inline LiteRtStatus InferMirrorPad(const LiteRtOpT& op,
   return InferPad(op, input_shapes, output_shapes);
 }
 
+template <typename T>
+inline void ReferencePadv2(const T* input_data, const int32_t* input_dims,
+                           int rank, const int32_t* paddings, T constant_value,
+                           T* output_data) {
+  if (rank <= 0) {
+    if (rank == 0) output_data[0] = input_data[0];
+    return;
+  }
+  std::vector<int32_t> out_dims(rank);
+  std::vector<size_t> in_strides(rank, 1);
+  size_t total_out = 1;
+  for (int d = rank - 1; d >= 0; --d) {
+    out_dims[d] = input_dims[d] + paddings[2 * d] + paddings[2 * d + 1];
+    total_out *= static_cast<size_t>(out_dims[d]);
+    if (d + 1 < rank) {
+      in_strides[d] =
+          in_strides[d + 1] * static_cast<size_t>(input_dims[d + 1]);
+    }
+  }
+  std::vector<int32_t> pos(rank, 0);
+  for (size_t out_idx = 0; out_idx < total_out; ++out_idx) {
+    bool in_bounds = true;
+    size_t in_idx = 0;
+    for (int d = 0; d < rank; ++d) {
+      const int32_t c = pos[d] - paddings[2 * d];
+      if (c < 0 || c >= input_dims[d]) {
+        in_bounds = false;
+        break;
+      }
+      in_idx += static_cast<size_t>(c) * in_strides[d];
+    }
+    output_data[out_idx] = in_bounds ? input_data[in_idx] : constant_value;
+    for (int d = rank - 1; d >= 0; --d) {
+      if (++pos[d] < out_dims[d]) break;
+      pos[d] = 0;
+    }
+  }
+}
+
+template <typename T>
+inline void ReferenceMirrorPad(const T* input_data, const int32_t* input_dims,
+                               int rank, const int32_t* paddings,
+                               bool symmetric, T* output_data) {
+  if (rank <= 0) {
+    if (rank == 0) output_data[0] = input_data[0];
+    return;
+  }
+  auto mirror_idx = [symmetric](int32_t idx, int32_t dim) -> int32_t {
+    if (dim <= 1) return 0;
+    while (idx < 0 || idx >= dim) {
+      if (idx < 0) {
+        idx = symmetric ? (-idx - 1) : -idx;
+      } else {
+        idx = symmetric ? (2 * dim - 1 - idx) : (2 * dim - 2 - idx);
+      }
+    }
+    return idx;
+  };
+  std::vector<int32_t> out_dims(rank);
+  std::vector<size_t> in_strides(rank, 1);
+  size_t total_out = 1;
+  for (int d = rank - 1; d >= 0; --d) {
+    out_dims[d] = input_dims[d] + paddings[2 * d] + paddings[2 * d + 1];
+    total_out *= static_cast<size_t>(out_dims[d]);
+    if (d + 1 < rank) {
+      in_strides[d] =
+          in_strides[d + 1] * static_cast<size_t>(input_dims[d + 1]);
+    }
+  }
+  std::vector<int32_t> pos(rank, 0);
+  for (size_t out_idx = 0; out_idx < total_out; ++out_idx) {
+    size_t in_idx = 0;
+    for (int d = 0; d < rank; ++d) {
+      const int32_t c = mirror_idx(pos[d] - paddings[2 * d], input_dims[d]);
+      in_idx += static_cast<size_t>(c) * in_strides[d];
+    }
+    output_data[out_idx] = input_data[in_idx];
+    for (int d = rank - 1; d >= 0; --d) {
+      if (++pos[d] < out_dims[d]) break;
+      pos[d] = 0;
+    }
+  }
+}
+
 }  // namespace litert::internal
 
 #endif  // ODML_LITERT_LITERT_CORE_MODEL_OPS_PAD_H_
