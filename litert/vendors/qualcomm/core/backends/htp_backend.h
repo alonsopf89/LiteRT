@@ -19,6 +19,7 @@
 #include "QnnDevice.h"  // from @qairt
 #include "QnnInterface.h"  // from @qairt
 #include "QnnTypes.h"  // from @qairt
+#include "absl/base/attributes.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "litert/vendors/qualcomm/core/backends/graph_config_builder.h"
 #include "litert/vendors/qualcomm/core/backends/qnn_backend.h"
@@ -31,7 +32,8 @@ class HtpBackend : public QnnBackend {
  public:
   struct PlatformInfoDeleter {
     const QNN_INTERFACE_VER_TYPE* api_;
-    void operator()(const QnnDevice_PlatformInfo_t* ptr) const {
+    ABSL_ATTRIBUTE_NO_SANITIZE_CFI void operator()(
+        const QnnDevice_PlatformInfo_t* ptr) const {
       if (ptr) api_->deviceFreePlatformInfo(nullptr, ptr);
     }
   };

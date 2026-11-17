@@ -33,6 +33,7 @@
 #include "QnnTypes.h"  // from @qairt
 #include "System/QnnSystemContext.h"  // from @qairt
 #include "System/QnnSystemInterface.h"  // from @qairt
+#include "absl/base/attributes.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "absl/types/span.h"  // from @com_google_absl
 #include "litert/c/internal/litert_logging.h"
@@ -92,7 +93,7 @@ class QnnManager {
   using Ptr = std::unique_ptr<QnnManager>;
   using SystemContextHandle =
       std::unique_ptr<std::remove_pointer<QnnSystemContext_Handle_t>::type,
-                      QnnSystemContext_FreeFn_t>;
+                      ::qnn::QnnHandleDeleter<QnnSystemContext_FreeFn_t>>;
   class ContextHandle;
 
   static Expected<Ptr> Create(
@@ -217,7 +218,7 @@ class QnnManager::ContextHandle {
 
   ContextHandle() = default;
 
-  ~ContextHandle() {
+  ABSL_ATTRIBUTE_NO_SANITIZE_CFI ~ContextHandle() {
     if (profile_ && profile_free_fn_) {
       if (auto status = profile_free_fn_(profile_); status != QNN_SUCCESS) {
         LITERT_LOG(LITERT_ERROR, "%s", "Failed to free profile handle\n");
