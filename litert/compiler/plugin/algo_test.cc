@@ -666,6 +666,17 @@ TEST(TestCompositeInlining, RemapsSignatureOutputAliases) {
   EXPECT_EQ(alias.GetInputTensor(0), input);
 }
 
+TEST(TestCompositeInlining, FailsIfDestinationOpIsNotInModel) {
+  LiteRtModelT model;
+  model.EmplaceSubgraph();
+  auto& decomp_subgraph = model.EmplaceSubgraph();
+
+  LiteRtModelT other_model;
+  auto& orphan_op = other_model.EmplaceSubgraph().EmplaceOp();
+
+  EXPECT_FALSE(InlineSubgraph(model, orphan_op, &decomp_subgraph).HasValue());
+}
+
 TEST(TestCompositeInlining, inlineSimpleComposite) {
   auto model_wrap = testing::LoadTestFileModel("rms_norm_composite.tflite");
   ASSERT_TRUE(model_wrap);
