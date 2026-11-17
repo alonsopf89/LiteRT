@@ -3341,6 +3341,15 @@ Expected<std::string> LiteRtCompiledModelT::GetErrorMessages() const {
   return buffer_reporter->message();
 }
 
+namespace {
+
+LITERT_NO_CFI_CHECK bool InvokeCancellationCallback(
+    bool (*check_cancelled_func)(void*), void* data) {
+  return check_cancelled_func(data);
+}
+
+}  // namespace
+
 bool LiteRtCompiledModelT::CheckCancelledWrapper(void* data) {
   auto* model = static_cast<LiteRtCompiledModelT*>(data);
   if (model && model->check_cancelled_func_cpp_) {
@@ -3368,7 +3377,14 @@ void LiteRtCompiledModelT::SetCancellationFunction(
   if (!interp_) {
     return;
   }
-  interp_->SetCancellationFunction(data, check_cancelled_func);
+  if (!check_cancelled_func) {
+    interp_->SetCancellationFunction(data, nullptr);
+    return;
+  }
+  check_cancelled_func_cpp_ = [data, check_cancelled_func]() {
+    return InvokeCancellationCallback(check_cancelled_func, data);
+  };
+  interp_->SetCancellationFunction(this, &CheckCancelledWrapper);
 }
 
 // -----------------------------------------------------------------------------
